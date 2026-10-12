@@ -14,6 +14,7 @@
   let moveHandler = null;
   let focusInHandler = null;
   let focusOutHandler = null;
+  let clickHandler = null;
 
   function findRefTarget(node) {
     while (node && node !== shadow) {
@@ -53,6 +54,41 @@
     if (tooltip) tooltip.style.display = "none";
   }
 
+  function citationText(target) {
+    const inline = target.getAttribute("data-csr-cite-text");
+    if (inline) return inline;
+    const entry = bibliography[target.getAttribute("data-csr-cite-ref")];
+    return entry ? entry.text : "";
+  }
+
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (_) {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.cssText = "position:fixed;opacity:0;";
+      document.body.appendChild(ta);
+      ta.select();
+      let ok = false;
+      try { ok = document.execCommand("copy"); } catch (_) {}
+      ta.remove();
+      return ok;
+    }
+  }
+
+  let copiedTimer = null;
+  async function copyFor(target) {
+    const text = citationText(target);
+    if (!text) return;
+    const ok = await copyText(text);
+    if (!tooltip || tooltip.style.display !== "block") return;
+    tooltip.textContent = ok ? "Copied to clipboard" : "Copy failed";
+    clearTimeout(copiedTimer);
+    copiedTimer = setTimeout(() => { if (tooltip) tooltip.textContent = text; }, 1200);
+  }
+
   CSR.citationPeek = {
     attach(shadowRoot, bibliographyMap) {
       shadow = shadowRoot;
@@ -77,7 +113,12 @@
         showFor(target, r.left, r.bottom);
       };
       focusOutHandler = () => hide();
+      clickHandler = (e) => {
+        const target = findRefTarget(e.composedPath ? e.composedPath()[0] : e.target);
+        if (target) copyFor(target);
+      };
 
+      shadow.addEventListener("click", clickHandler);
       shadow.addEventListener("mouseover", overHandler);
       shadow.addEventListener("mousemove", moveHandler);
       shadow.addEventListener("mouseout", outHandler);
@@ -86,6 +127,7 @@
     },
     detach() {
       if (shadow) {
+        shadow.removeEventListener("click", clickHandler);
         shadow.removeEventListener("mouseover", overHandler);
         shadow.removeEventListener("mousemove", moveHandler);
         shadow.removeEventListener("mouseout", outHandler);

@@ -10,7 +10,7 @@
 .csr-root{
   position:fixed;inset:0;z-index:2147483647;
   background:#F2F5F3;color:#16252C;
-  font-family:Georgia,'Literata',serif;line-height:1.65;
+  font-family:'Literata',Georgia,serif;line-height:1.65;
   display:flex;flex-direction:column;
 }
 .csr-root *{box-sizing:border-box}
@@ -77,7 +77,33 @@ h2.s{font-family:'Instrument Sans',system-ui,sans-serif;font-weight:600;font-siz
     return header;
   }
 
+  const FONT_URL =
+    "https://fonts.googleapis.com/css2?family=Literata:opsz,wght@7..72,400;7..72,600&family=Instrument+Sans:wght@400;600&display=swap";
+
+  // @font-face rules are ignored inside shadow roots, so the stylesheet must
+  // live in the host document; the shadow tree can then use the families by name.
+  function ensureFonts() {
+    if (document.getElementById("csr-fonts")) return;
+    const pre = document.createElement("link");
+    pre.id = "csr-fonts-preconnect";
+    pre.rel = "preconnect";
+    pre.href = "https://fonts.googleapis.com";
+    const link = document.createElement("link");
+    link.id = "csr-fonts";
+    link.rel = "stylesheet";
+    link.href = FONT_URL;
+    document.head.append(pre, link);
+  }
+
+  function removeFonts() {
+    ["csr-fonts", "csr-fonts-preconnect"].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.remove();
+    });
+  }
+
   CSR.renderOverlay = function renderOverlay(article) {
+    ensureFonts();
     const host = document.createElement("div");
     host.id = "csr-overlay-host";
     const shadow = host.attachShadow({ mode: "open" });
@@ -138,6 +164,7 @@ h2.s{font-family:'Instrument Sans',system-ui,sans-serif;font-weight:600;font-siz
     CSR.readingMark.detach();
     CSR.citationPeek.detach();
     host.remove();
+    removeFonts();
     document.documentElement.style.overflow = "";
   };
 })();

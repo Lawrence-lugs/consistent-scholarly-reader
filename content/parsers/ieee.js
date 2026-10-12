@@ -8,9 +8,9 @@
 //  - Each section: <div class="section" id="sec1"><div class="header
 //    article-hdr"><div class="kicker">SECTION I.</div><h2>Introduction</h2>
 //    </div><p>...</p>...<div class="figure ...">...</div>...</div>
-//  - Figures are <div class="figure ..."> (not a <figure> tag) wrapping an
-//    <img class="document-ft-image">, a <div class="figcaption"> and a
-//    "Show All" <button> (dropped by the sanitizer's DROP_TAGS).
+//  - Figure markup varies between article templates. Some templates expose
+//    the image link, image, bold label and caption paragraph as siblings
+//    rather than grouping them in a figure container.
 //  - In-text citations are <a ref-type="bibr" anchor="ref1"
 //    href="javascript:void()">[1]</a> -- note href is a dead javascript:
 //    placeholder (stripped by common.js's href scheme guard); the real
@@ -40,6 +40,31 @@
     CSR.util.tagCitationRefs(root, 'a[ref-type="bibr"][anchor]', (a) => a.getAttribute("anchor"));
   }
 
+  function groupLooseFigures(root) {
+    // The sanitizer unwraps <div>s, so IEEE's <div class="figure"> would
+    // otherwise collapse into loose <a>/<img>/<b>/<p> siblings. Convert the
+    // containers into real <figure>/<figcaption> elements first.
+    const doc = root.ownerDocument;
+    root.querySelectorAll("div.figure").forEach((div) => {
+      const img = div.querySelector("img");
+      if (!img) return;
+      const figure = doc.createElement("figure");
+      if (div.id) figure.id = div.id;
+
+      const wrap = div.querySelector(".img-wrap") || img;
+      const link = img.closest("a");
+      figure.appendChild(link && wrap.contains(link) ? link : img);
+
+      const capSrc = div.querySelector(".figcaption");
+      if (capSrc) {
+        const caption = doc.createElement("figcaption");
+        while (capSrc.firstChild) caption.appendChild(capSrc.firstChild);
+        figure.appendChild(caption);
+      }
+      div.replaceWith(figure);
+    });
+  }
+
   function buildBibliography(doc) {
     const list = CSR.util.genericBibliography(doc, REF_LIST_SELECTORS);
     const map = {};
@@ -59,6 +84,7 @@
       // Fall back to a flat single block in case a different IEEE article
       // template doesn't use .section wrappers.
       const clone = body.cloneNode(true);
+      groupLooseFigures(clone);
       tagCitations(clone);
       out.push({ id: "body", title: "", content: CSR.util.cloneClean(clone, { baseURI: doc.baseURI }) });
       return out;
@@ -70,6 +96,7 @@
       const clone = sec.cloneNode(true);
       const cloneHeader = clone.querySelector(":scope > .header");
       if (cloneHeader) cloneHeader.remove();
+      groupLooseFigures(clone);
       tagCitations(clone);
       out.push({
         id: sec.id || CSR.util.slugify(title),

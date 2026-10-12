@@ -31,19 +31,28 @@
   ]);
 
   const ALLOWED_ATTRS = {
-    a: ["href", "data-csr-cite-ref"],
+    a: ["href", "data-csr-cite-ref", "data-csr-cite-text"],
     img: ["src", "alt", "width", "height"],
+    object: ["data", "type", "width", "height"],
     td: ["colspan", "rowspan"],
     th: ["colspan", "rowspan"],
     "*": ["id"],
   };
 
+  // Schemes allowed on an <a href>; anything else (javascript:, vbscript:,
+  // etc. -- seen verbatim in some publishers' own markup, e.g. IEEE's
+  // `href="javascript:void()"` citation placeholders) is dropped rather than
+  // preserved, since a clicked link executing script would be a real risk.
+  const SAFE_HREF_SCHEMES = new Set(["http:", "https:", "mailto:", "data:"]);
+
   function absUrl(url, base) {
     if (!url) return url;
     try {
-      return new URL(url, base || document.baseURI).href;
+      const resolved = new URL(url, base || document.baseURI);
+      if (!SAFE_HREF_SCHEMES.has(resolved.protocol)) return null;
+      return resolved.href;
     } catch (e) {
-      return url;
+      return null;
     }
   }
   CSR.util.absUrl = absUrl;
@@ -62,7 +71,10 @@
     for (const name of allowed) {
       if (!src.hasAttribute(name)) continue;
       let val = src.getAttribute(name);
-      if (name === "href" || name === "src") val = absUrl(val, baseURI);
+      if (name === "href" || name === "src" || name === "data") {
+        val = absUrl(val, baseURI);
+        if (val === null) continue; // unsafe/unresolvable URL -- drop the attribute
+      }
       dest.setAttribute(name, val);
     }
   }
@@ -104,6 +116,18 @@
       out.loading = "lazy";
       return out;
     }
+    if (tag === "object") {
+      // Vector-graphics figures embedded as <object type="image/svg+xml"
+      // data="...">; unlike <img> these have no fallback text/child content
+      // of their own, so without this special case they sanitize down to an
+      // empty element and get dropped entirely by the empty-element check
+      // below (this was the "figures missing" bug).
+      if (!node.hasAttribute("data")) return null;
+      const out = document.createElement("object");
+      copyAllowedAttrs(node, out, baseURI);
+      if (!out.hasAttribute("data")) return null; // data: URL failed to resolve/was unsafe
+      return out;
+    }
 
     if (!ALLOWED_TAGS.has(tag)) {
       // Unwrap: keep children (e.g. publisher <div>/<section> wrappers)
@@ -129,6 +153,29 @@
     }
     return out;
   }
+
+  /**
+   * Tags in-text citation links with a `data-csr-cite-ref` id (so
+   * citationPeek.js can resolve it against the page's parsed bibliography
+   * map) and, when the publisher already embeds the full reference text
+   * inline (e.g. Nature's `title="..."` attribute on citation anchors),
+   * captures that into `data-csr-cite-text` so peek can show it directly
+   * without needing the bibliography list to parse correctly at all.
+   *
+   * @param {Element} root - subtree to scan (already detached/cloned).
+   * @param {string} selector - CSS selector matching citation <a> elements.
+   * @param {(a: Element) => string|null} idFromAnchor - extracts the
+   *   bibliography entry id this anchor points to, or null if none.
+   */
+  function tagCitationRefs(root, selector, idFromAnchor) {
+    root.querySelectorAll(selector).forEach((a) => {
+      const id = idFromAnchor(a);
+      if (id) a.setAttribute("data-csr-cite-ref", id);
+      const inline = (a.getAttribute("title") || "").trim();
+      if (inline.length > 15) a.setAttribute("data-csr-cite-text", inline);
+    });
+  }
+  CSR.util.tagCitationRefs = tagCitationRefs;
 
   function textContentOf(node) {
     return (node && node.textContent || "").replace(/\s+/g, " ").trim();
@@ -214,4 +261,11 @@
     return null;
   }
   CSR.util.genericBibliography = genericBibliography;
+
+  /** Remove all elements matching any of `selectors` from `root` in place. */
+  function stripSelectors(root, selectors) {
+    if (!selectors || !selectors.length) return;
+    root.querySelectorAll(selectors.join(",")).forEach((el) => el.remove());
+  }
+  CSR.util.stripSelectors = stripSelectors;
 })();

@@ -8,6 +8,7 @@
   const CSR = window.CSR;
 
   const BLK = ".csr-page p, .csr-page li, .csr-page blockquote, .csr-page figcaption, .csr-page td";
+  const BLK_TAGS = new Set(["P", "LI", "BLOCKQUOTE", "FIGCAPTION", "TD"]);
   const DISPLAY_MATH = "math[display='block'], mjx-container[display='true']";
   const ALL = `${BLK}, ${DISPLAY_MATH}`;
   const ABBR = /(?:\b(?:e\.g|i\.e|et al|etc|vs|cf|Figs?|Eqs?|Secs?|Tab|Refs?|Algs?|approx|resp|No)|\b[A-Z])\.$/;
@@ -34,7 +35,14 @@
         if (c.nodeType === 3) {
           run.push({ t: c });
         } else if (c.nodeType === 1) {
-          const tag = c.tagName;
+          // Foreign elements (MathML/SVG) keep their authored lower-case
+          // tagName, unlike HTML elements which are always upper-cased --
+          // comparing against upper-case literals here silently never
+          // matched real <math> elements and was the root cause of the
+          // "disappearing equations" bug (build() then ran generic sentence
+          // splitting *inside* <math>, inserting an HTML <span> into MathML
+          // content, which real browsers refuse to render).
+          const tag = c.tagName.toUpperCase();
           if (tag === "MATH" || tag === "MJX-CONTAINER") {
             const display = c.getAttribute("display") === "true" || c.getAttribute("display") === "block";
             if (display) {
@@ -43,8 +51,15 @@
             } else {
               run.push({ a: c });
             }
-          } else if (tag === "SCRIPT" || tag === "STYLE" || tag === "IMG") {
+          } else if (tag === "SCRIPT" || tag === "STYLE" || tag === "IMG" || tag === "OBJECT") {
             // skip
+          } else if (BLK_TAGS.has(tag)) {
+            // Nested block (e.g. <li><p>...</p></li>, common in LaTeXML/
+            // JATS list markup): don't flatten it into this run. It matches
+            // BLK/ALL on its own and gets its own unit from the top-level
+            // loop in attach(); recursing into it here let sentence ranges
+            // span the li/p boundary, corrupting the DOM (the "doubled
+            // list" bug).
           } else {
             walk(c);
           }
@@ -215,7 +230,8 @@
       on = false;
       hintEl = null;
       for (const el of Array.from(shadow.querySelectorAll(ALL))) {
-        if (el.tagName === "MATH" || el.tagName === "MJX-CONTAINER") {
+        const tag = el.tagName.toUpperCase(); // see tokens()/walk() comment on case-sensitivity
+        if (tag === "MATH" || tag === "MJX-CONTAINER") {
           if (!el.parentElement.closest(BLK)) {
             el.classList.add("rd");
             units.push(el);
@@ -223,6 +239,10 @@
           continue;
         }
         if (el.querySelector(DISPLAY_MATH)) continue;
+        // Skip containers that have a nested block unit of their own (e.g.
+        // <li><p>...</p></li>): the inner <p> matches ALL too and will be
+        // built as its own unit below, independently.
+        if (el.querySelector(BLK)) continue;
         units.push(...build(el));
       }
       hint();

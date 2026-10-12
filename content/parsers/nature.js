@@ -1,11 +1,21 @@
 // Parser for nature.com articles.
 //
-// ⚠️ Best-effort / unverified: built from commonly-documented Nature DOM
-// conventions (c-article-* class names, JATS-derived section/reference
-// markup), not confirmed against a live subscriber page (paywalled pages
-// serve near-empty HTML to unauthenticated fetches). If extraction misses
-// content on a real page, capture the article body/reference-list outerHTML
-// from devtools and the selectors below can be corrected.
+// Verified against a captured live article page (reference/nature-citations-bad.html):
+//  - div.c-article-body wraps the sections.
+//  - Each section is <section aria-labelledby="X" data-title="..."> containing
+//    <div class="c-article-section"><h2 class="c-article-section__title" id="X">...
+//  - In-text citation anchors look like:
+//      <sup><a data-track-action="reference anchor" title="<full citation text>"
+//            href="/articles/<slug>#ref-CR6">6</a></sup>
+//    Nature conveniently embeds the *full* reference text in the anchor's own
+//    `title` attribute, which CSR.util.tagCitationRefs captures automatically
+//    (this is what actually fixes "citation hover doesn't work" -- our
+//    sanitizer was also stripping that title attribute before, see common.js).
+//  - The reference list itself is <ol class="c-article-references"><li
+//    class="c-article-references__item"><p class="c-article-references__text"
+//    id="ref-CR1">...</p>...</li></ol> -- note the id lives on the inner <p>,
+//    not the <li> (a first version of this parser looked for `li[id]` and
+//    silently built an empty bibliography map, the other half of that bug).
 (function () {
   "use strict";
   const CSR = window.CSR;
@@ -14,23 +24,21 @@
     return /(^|\.)nature\.com$/.test(doc.location.hostname);
   }
 
-  const BODY_SELECTORS = [
-    "div.c-article-body",
-    "div[data-component='article-body']",
-    "article .c-article-body",
-  ];
-  const REF_LIST_SELECTORS = [
-    "ol.c-article-references",
-    "ul.c-article-references",
-    "div.c-article-references",
-    "section[aria-labelledby='Bib1'] ol",
-  ];
+  const BODY_SELECTORS = ["div.c-article-body", "div[data-component='article-body']"];
+  const REF_LIST_SELECTORS = ["ol.c-article-references", "div.c-article-references"];
+  const CITE_SELECTOR = 'a[href*="#ref-CR"], a[href*="#Bib"], a[href^="#CR"]';
+
+  // Non-article-content widgets that Nature's CMS interleaves directly
+  // inside the same body container as real sections (there's no easy DOM
+  // position to distinguish them other than by their own class/aria-label).
+  const NON_CONTENT_SECTION_SELECTOR =
+    "section.c-article-recommendations, section.app-explore-related-subjects, section[aria-labelledby='inline-recommendations']";
 
   function tagCitations(root) {
-    root.querySelectorAll('a[href*="#ref-CR"], a[href*="#Bib"], a[href^="#CR"]').forEach((a) => {
+    CSR.util.tagCitationRefs(root, CITE_SELECTOR, (a) => {
       const href = a.getAttribute("href") || "";
-      const hash = href.includes("#") ? href.slice(href.indexOf("#") + 1) : href;
-      if (hash) a.setAttribute("data-csr-cite-ref", hash);
+      const i = href.indexOf("#");
+      return i >= 0 ? href.slice(i + 1) : null;
     });
   }
 
@@ -38,7 +46,7 @@
     const list = CSR.util.genericBibliography(doc, REF_LIST_SELECTORS);
     const map = {};
     if (!list) return map;
-    list.querySelectorAll("li[id]").forEach((item) => {
+    list.querySelectorAll(".c-article-references__text[id], li[id]").forEach((item) => {
       const clone = item.cloneNode(true);
       const frag = CSR.util.cloneClean(clone, { baseURI: doc.baseURI });
       map[item.id] = { id: item.id, text: CSR.util.textContentOf(frag) };
@@ -48,7 +56,9 @@
 
   function sectionsFrom(doc, body) {
     const out = [];
-    const sections = body.querySelectorAll("section");
+    const sections = Array.from(body.querySelectorAll("section")).filter(
+      (sec) => !sec.matches(NON_CONTENT_SECTION_SELECTOR)
+    );
     if (sections.length) {
       sections.forEach((sec) => {
         const titleEl = sec.querySelector("h2, h3");
@@ -66,6 +76,7 @@
     } else {
       // Flat fallback: no <section> wrappers found, treat the whole body as one block.
       const clone = body.cloneNode(true);
+      clone.querySelectorAll(NON_CONTENT_SECTION_SELECTOR).forEach((n) => n.remove());
       tagCitations(clone);
       out.push({ id: "body", title: "", content: CSR.util.cloneClean(clone, { baseURI: doc.baseURI }) });
     }

@@ -26,10 +26,10 @@
   ];
 
   function tagCitations(root) {
-    root.querySelectorAll('a.ref, a[href*="#core-R"], a[href*="#bib"], a[href^="#B"]').forEach((a) => {
+    CSR.util.tagCitationRefs(root, 'a.ref, a[href*="#core-R"], a[href*="#bib"], a[href^="#B"]', (a) => {
       const href = a.getAttribute("href") || "";
-      const hash = href.includes("#") ? href.slice(href.indexOf("#") + 1) : href;
-      if (hash) a.setAttribute("data-csr-cite-ref", hash);
+      const i = href.indexOf("#");
+      return i >= 0 ? href.slice(i + 1) : null;
     });
   }
 

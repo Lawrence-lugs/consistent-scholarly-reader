@@ -38,6 +38,7 @@ h2.s{font-family:'Instrument Sans',system-ui,sans-serif;font-weight:600;font-siz
 .csr-page blockquote{border-left:3px solid #CBD6D3;padding-left:1rem;color:#5B6C73;margin:1.1rem 0}
 .csr-page figure{background:#FBFCFB;border:1px solid #CBD6D3;padding:.6rem;margin:1.4rem 0}
 .csr-page figure img{display:block;width:100%;height:auto;margin:0}
+.csr-page figure object{display:block;width:100%;height:auto;margin:0;pointer-events:none}
 .csr-page figcaption{font-size:.8rem;color:#5B6C73;margin-top:.4rem}
 .csr-page table{border-collapse:collapse;width:100%;font-size:.88rem;margin:1rem 0}
 .csr-page th,.csr-page td{border-bottom:1px solid #CBD6D3;padding:.45rem .5rem;text-align:left;vertical-align:top}

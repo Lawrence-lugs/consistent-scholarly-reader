@@ -17,16 +17,17 @@
 
   function findRefTarget(node) {
     while (node && node !== shadow) {
-      if (node.hasAttribute && node.hasAttribute("data-csr-cite-ref")) return node;
+      if (node.hasAttribute && (node.hasAttribute("data-csr-cite-ref") || node.hasAttribute("data-csr-cite-text"))) return node;
       node = node.parentNode;
     }
     return null;
   }
 
   function showFor(target, x, y) {
+    const inline = target.getAttribute("data-csr-cite-text");
     const ref = target.getAttribute("data-csr-cite-ref");
     const entry = bibliography[ref];
-    const text = entry ? entry.text : "Reference details not found on this page.";
+    const text = inline || (entry ? entry.text : "Reference details not found on this page.");
     if (!tooltip) {
       tooltip = document.createElement("div");
       tooltip.className = "csr-peek";

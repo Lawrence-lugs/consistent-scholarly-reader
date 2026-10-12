@@ -10,9 +10,23 @@
   }
 
   function tagCitations(root) {
-    root.querySelectorAll('a[href^="#bib"]').forEach((a) => {
-      a.setAttribute("data-csr-cite-ref", a.getAttribute("href").slice(1));
-    });
+    CSR.util.tagCitationRefs(root, 'a[href^="#bib"]', (a) => a.getAttribute("href").slice(1));
+  }
+
+  // LaTeXML-specific cleanup applied to every clone before sanitizing:
+  //  - .ltx_tag_item is a manually-rendered bullet/number label ("•", "1.")
+  //    that duplicates the native <ul>/<ol> marker the browser already
+  //    draws, causing a visibly doubled bullet/number.
+  //  - .ltx_listing_data is a hidden-text "download raw listing" link (a
+  //    base64 data: URI) that has no business being visible content.
+  //  - .ltx_listingline wraps one line of a code listing in a <div>, which
+  //    our sanitizer unwraps (div isn't an allowed tag); insert an explicit
+  //    <br> so lines don't all run together into one unreadable paragraph.
+  //    This is a partial mitigation, not a real code-listing renderer:
+  //    original indentation/whitespace is still not preserved.
+  function stripLatexmlArtifacts(clone) {
+    clone.querySelectorAll(".ltx_tag_item, .ltx_listing_data").forEach((n) => n.remove());
+    clone.querySelectorAll(".ltx_listingline").forEach((n) => n.appendChild(document.createElement("br")));
   }
 
   function buildBibliography(doc) {
@@ -35,6 +49,7 @@
     if (abstract) {
       const clone = abstract.cloneNode(true);
       clone.querySelectorAll(":scope > .ltx_title").forEach((n) => n.remove());
+      stripLatexmlArtifacts(clone);
       tagCitations(clone);
       out.push({
         id: "abstract",
@@ -52,6 +67,7 @@
       const clone = sec.cloneNode(true);
       const cloneTitle = clone.querySelector(":scope > .ltx_title");
       if (cloneTitle) cloneTitle.remove();
+      stripLatexmlArtifacts(clone);
       tagCitations(clone);
       out.push({
         id: sec.id || CSR.util.slugify(title),
@@ -65,6 +81,7 @@
       const clone = biblio.cloneNode(true);
       const cloneTitle = clone.querySelector(".ltx_title");
       if (cloneTitle) cloneTitle.remove();
+      stripLatexmlArtifacts(clone);
       out.push({
         id: "references",
         title: "References",

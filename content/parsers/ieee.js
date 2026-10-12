@@ -1,11 +1,29 @@
 // Parser for ieeexplore.ieee.org document pages.
 //
-// ⚠️ Best-effort / unverified: IEEE Xplore mostly renders only the abstract
-// server-side and loads full text (when available at all) asynchronously;
-// article pages are frequently abstract-only even with access. The
-// selectors below are a best guess, not confirmed against a live page. If
-// extraction misses content, capture the article body/reference-list
-// outerHTML from devtools so the selectors can be corrected.
+// Verified against a captured live document page (reference/ieee-page.html,
+// document 10040932) -- the previous version's selectors were pure guesses
+// and matched nothing, which is why "everything except the title disappeared".
+// Real structure:
+//  - Full text root: <div id="BodyWrapper"><div id="article"> ... </div></div>
+//  - Each section: <div class="section" id="sec1"><div class="header
+//    article-hdr"><div class="kicker">SECTION I.</div><h2>Introduction</h2>
+//    </div><p>...</p>...<div class="figure ...">...</div>...</div>
+//  - Figures are <div class="figure ..."> (not a <figure> tag) wrapping an
+//    <img class="document-ft-image">, a <div class="figcaption"> and a
+//    "Show All" <button> (dropped by the sanitizer's DROP_TAGS).
+//  - In-text citations are <a ref-type="bibr" anchor="ref1"
+//    href="javascript:void()">[1]</a> -- note href is a dead javascript:
+//    placeholder (stripped by common.js's href scheme guard); the real
+//    target id is in the `anchor` attribute, not href.
+//
+// ⚠️ Known limitation: the reference list text itself is lazy-loaded into a
+// collapsed "References" accordion panel only when a reader clicks to
+// expand it (not present in the initial DOM, and IEEE's content differs by
+// article/access level besides). We deliberately don't simulate that click
+// (it would mean waiting on an async, publisher-controlled UI flow rather
+// than reading page-local text), so citation hover peek on IEEE will
+// typically show "Reference details not found on this page" even though the
+// in-text numbering/body text itself renders correctly.
 (function () {
   "use strict";
   const CSR = window.CSR;
@@ -14,25 +32,12 @@
     return /(^|\.)ieeexplore\.ieee\.org$/.test(doc.location.hostname);
   }
 
-  const BODY_SELECTORS = [
-    "div.article-content",
-    "section.document-content",
-    "div.text",
-    "div#article",
-  ];
-  const ABSTRACT_SELECTORS = ["div.abstract-text", "div.u-mb-1 .abstract-text", "meta[name='description']"];
-  const REF_LIST_SELECTORS = [
-    "div.reference-container ol",
-    "section.reference-container ol",
-    "ol.references-list",
-  ];
+  const BODY_SELECTORS = ["div#article", "div.document-text", "section.document-content"];
+  const ABSTRACT_SELECTORS = ["div.abstract-text", "meta[name='description']"];
+  const REF_LIST_SELECTORS = ["div.reference-container ol", "section.reference-container ol", "ol.references-list"];
 
   function tagCitations(root) {
-    root.querySelectorAll('a[href*="#reference-"], a.reference-link, a[href^="#ref"]').forEach((a) => {
-      const href = a.getAttribute("href") || "";
-      const hash = href.includes("#") ? href.slice(href.indexOf("#") + 1) : href;
-      if (hash) a.setAttribute("data-csr-cite-ref", hash);
-    });
+    CSR.util.tagCitationRefs(root, 'a[ref-type="bibr"][anchor]', (a) => a.getAttribute("anchor"));
   }
 
   function buildBibliography(doc) {
@@ -49,28 +54,28 @@
 
   function sectionsFrom(doc, body) {
     const out = [];
-    const headings = body.querySelectorAll("h2, h3");
-    if (!headings.length) {
+    const sections = Array.from(body.querySelectorAll(".section"));
+    if (!sections.length) {
+      // Fall back to a flat single block in case a different IEEE article
+      // template doesn't use .section wrappers.
       const clone = body.cloneNode(true);
       tagCitations(clone);
       out.push({ id: "body", title: "", content: CSR.util.cloneClean(clone, { baseURI: doc.baseURI }) });
       return out;
     }
-    let current = null;
-    const groups = [];
-    Array.from(body.children).forEach((node) => {
-      if (/^H[23]$/.test(node.tagName)) {
-        current = { title: CSR.util.textContentOf(node), id: node.id || CSR.util.slugify(node.textContent), nodes: [] };
-        groups.push(current);
-      } else if (current) {
-        current.nodes.push(node);
-      }
-    });
-    groups.forEach((sec) => {
-      const wrapper = doc.createElement("div");
-      sec.nodes.forEach((n) => wrapper.appendChild(n.cloneNode(true)));
-      tagCitations(wrapper);
-      out.push({ id: sec.id, title: sec.title, content: CSR.util.cloneClean(wrapper, { baseURI: doc.baseURI }) });
+    sections.forEach((sec) => {
+      if (sec.parentElement.closest(".section")) return; // nested subsection, handled with its parent
+      const titleEl = sec.querySelector(":scope > .header h2, :scope > .header h3");
+      const title = titleEl ? CSR.util.textContentOf(titleEl) : "";
+      const clone = sec.cloneNode(true);
+      const cloneHeader = clone.querySelector(":scope > .header");
+      if (cloneHeader) cloneHeader.remove();
+      tagCitations(clone);
+      out.push({
+        id: sec.id || CSR.util.slugify(title),
+        title,
+        content: CSR.util.cloneClean(clone, { baseURI: doc.baseURI }),
+      });
     });
     return out;
   }
@@ -78,7 +83,7 @@
   function parse(doc) {
     doc = doc || document;
     const m = CSR.util.citationMeta(doc);
-    let body = CSR.util.genericArticleBody(doc, BODY_SELECTORS);
+    const body = CSR.util.genericArticleBody(doc, BODY_SELECTORS);
     let sections;
     if (body) {
       sections = sectionsFrom(doc, body);

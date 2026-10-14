@@ -96,6 +96,88 @@
   }
   CSR.util.cloneClean = cloneClean;
 
+  // Blocks reproduced as-is (structure + classes) because re-sanitizing them
+  // node-by-node breaks layout: tables (which LaTeXML also uses to lay out
+  // equations), code listings and pseudocode/algorithm figures.
+  const PRESERVED_CLASSES = ["ltx_listing", "ltx_float_algorithm", "ltx_algorithm"];
+
+  function isPreservedBlock(node, tag) {
+    if (tag === "table") return true;
+    return PRESERVED_CLASSES.some((c) => node.classList.contains(c));
+  }
+
+  // Computed properties baked into preserved blocks, so they keep their
+  // publisher look without needing the publisher's stylesheet.
+  const SNAPSHOT_PROPS = [
+    "display", "width", "min-width", "max-width", "height", "box-sizing",
+    "margin-top", "margin-right", "margin-bottom", "margin-left",
+    "padding-top", "padding-right", "padding-bottom", "padding-left",
+    "border-top-width", "border-top-style", "border-top-color",
+    "border-right-width", "border-right-style", "border-right-color",
+    "border-bottom-width", "border-bottom-style", "border-bottom-color",
+    "border-left-width", "border-left-style", "border-left-color",
+    "border-collapse", "border-spacing", "table-layout", "caption-side",
+    "text-align", "vertical-align", "white-space", "line-height",
+    "font-family", "font-size", "font-style", "font-weight", "color",
+    "text-decoration-line", "text-indent", "background-color",
+    "float", "overflow-x", "position", "top", "left",
+  ];
+
+  const SNAPSHOT_SELECTOR = "table, " + PRESERVED_CLASSES.map((c) => "." + c).join(", ");
+
+  function snapshotPair(src, dst) {
+    if (src.namespaceURI === "http://www.w3.org/2000/svg") return;
+    const cs = getComputedStyle(src);
+    let css = "";
+    for (const p of SNAPSHOT_PROPS) {
+      const v = cs.getPropertyValue(p);
+      if (v) css += p + ":" + v + ";";
+    }
+    dst.setAttribute("style", css);
+    const sc = src.children, dc = dst.children;
+    for (let i = 0; i < sc.length && i < dc.length; i++) snapshotPair(sc[i], dc[i]);
+  }
+
+  /**
+   * Deep clone of a live element in which tables/listings/algorithms carry
+   * their computed styles inline. Must be called on an element attached to
+   * the live page (detached clones have no computed style), and before any
+   * nodes are removed from the clone, since source/clone are walked in step.
+   */
+  function cloneWithStyles(root) {
+    const clone = root.cloneNode(true);
+    const src = Array.from(root.querySelectorAll(SNAPSHOT_SELECTOR));
+    const dst = Array.from(clone.querySelectorAll(SNAPSHOT_SELECTOR));
+    for (let i = 0; i < src.length && i < dst.length; i++) snapshotPair(src[i], dst[i]);
+    return clone;
+  }
+  CSR.util.cloneWithStyles = cloneWithStyles;
+
+  // Deep clone that still strips active content: drop DROP_TAGS subtrees,
+  // event-handler/style attributes, and unsafe URLs.
+  function cloneVerbatimSafe(node, baseURI) {
+    const copy = node.cloneNode(true);
+    const els = [copy, ...copy.querySelectorAll("*")];
+    for (const el of els) {
+      const tag = el.tagName.toLowerCase();
+      if (el !== copy && DROP_TAGS.has(tag) && !el.closest("math, mjx-container")) {
+        el.remove();
+        continue;
+      }
+      for (const attr of Array.from(el.attributes)) {
+        const name = attr.name.toLowerCase();
+        if (name.startsWith("on")) {
+          el.removeAttribute(attr.name);
+        } else if (name === "href" || name === "src" || name === "data" || name === "xlink:href") {
+          const val = absUrl(attr.value, baseURI);
+          if (val === null) el.removeAttribute(attr.name);
+          else el.setAttribute(attr.name, val);
+        }
+      }
+    }
+    return copy;
+  }
+
   function cleanNode(node, baseURI) {
     if (node.nodeType === Node.TEXT_NODE) {
       return document.createTextNode(node.nodeValue);
@@ -106,6 +188,9 @@
 
     if (VERBATIM_TAGS.has(tag)) {
       return node.cloneNode(true);
+    }
+    if (isPreservedBlock(node, tag)) {
+      return cloneVerbatimSafe(node, baseURI);
     }
     if (DROP_TAGS.has(tag)) {
       return null;

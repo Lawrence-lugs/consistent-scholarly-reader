@@ -63,7 +63,7 @@
       sections.forEach((sec) => {
         const titleEl = sec.querySelector("h2, h3");
         const title = titleEl ? CSR.util.textContentOf(titleEl) : "";
-        const clone = sec.cloneNode(true);
+        const clone = CSR.util.cloneWithStyles(sec);
         const cloneTitle = clone.querySelector("h2, h3");
         if (cloneTitle) cloneTitle.remove();
         tagCitations(clone);
@@ -75,7 +75,7 @@
       });
     } else {
       // Flat fallback: no <section> wrappers found, treat the whole body as one block.
-      const clone = body.cloneNode(true);
+      const clone = CSR.util.cloneWithStyles(body);
       clone.querySelectorAll(NON_CONTENT_SECTION_SELECTOR).forEach((n) => n.remove());
       tagCitations(clone);
       out.push({ id: "body", title: "", content: CSR.util.cloneClean(clone, { baseURI: doc.baseURI }) });

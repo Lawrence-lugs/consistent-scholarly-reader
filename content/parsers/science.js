@@ -53,7 +53,7 @@
         if (sec.parentElement.closest("div.NLM_sec, section")) return;
         const titleEl = sec.querySelector(".NLM_title, h2, h3");
         const title = titleEl ? CSR.util.textContentOf(titleEl) : "";
-        const clone = sec.cloneNode(true);
+        const clone = CSR.util.cloneWithStyles(sec);
         const cloneTitle = clone.querySelector(".NLM_title, h2, h3");
         if (cloneTitle) cloneTitle.remove();
         tagCitations(clone);
@@ -64,7 +64,7 @@
         });
       });
     } else {
-      const clone = body.cloneNode(true);
+      const clone = CSR.util.cloneWithStyles(body);
       tagCitations(clone);
       out.push({ id: "body", title: "", content: CSR.util.cloneClean(clone, { baseURI: doc.baseURI }) });
     }

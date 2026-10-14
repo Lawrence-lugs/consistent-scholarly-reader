@@ -83,7 +83,7 @@
     if (!sections.length) {
       // Fall back to a flat single block in case a different IEEE article
       // template doesn't use .section wrappers.
-      const clone = body.cloneNode(true);
+      const clone = CSR.util.cloneWithStyles(body);
       groupLooseFigures(clone);
       tagCitations(clone);
       out.push({ id: "body", title: "", content: CSR.util.cloneClean(clone, { baseURI: doc.baseURI }) });
@@ -93,7 +93,7 @@
       if (sec.parentElement.closest(".section")) return; // nested subsection, handled with its parent
       const titleEl = sec.querySelector(":scope > .header h2, :scope > .header h3");
       const title = titleEl ? CSR.util.textContentOf(titleEl) : "";
-      const clone = sec.cloneNode(true);
+      const clone = CSR.util.cloneWithStyles(sec);
       const cloneHeader = clone.querySelector(":scope > .header");
       if (cloneHeader) cloneHeader.remove();
       groupLooseFigures(clone);

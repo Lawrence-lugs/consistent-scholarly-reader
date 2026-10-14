@@ -49,7 +49,7 @@
     const out = [];
     const headings = body.querySelectorAll("h2, h3");
     if (!headings.length) {
-      const clone = body.cloneNode(true);
+      const clone = CSR.util.cloneWithStyles(body);
       tagCitations(clone);
       out.push({ id: "body", title: "", content: CSR.util.cloneClean(clone, { baseURI: doc.baseURI }) });
       return out;
@@ -66,7 +66,7 @@
     });
     return out.map((sec) => {
       const wrapper = doc.createElement("div");
-      sec.nodes.forEach((n) => wrapper.appendChild(n.cloneNode(true)));
+      sec.nodes.forEach((n) => wrapper.appendChild(CSR.util.cloneWithStyles(n)));
       tagCitations(wrapper);
       return { id: sec.id, title: sec.title, content: CSR.util.cloneClean(wrapper, { baseURI: doc.baseURI }) };
     });

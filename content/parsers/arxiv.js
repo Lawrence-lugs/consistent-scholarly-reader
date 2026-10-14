@@ -19,14 +19,9 @@
   //    draws, causing a visibly doubled bullet/number.
   //  - .ltx_listing_data is a hidden-text "download raw listing" link (a
   //    base64 data: URI) that has no business being visible content.
-  //  - .ltx_listingline wraps one line of a code listing in a <div>, which
-  //    our sanitizer unwraps (div isn't an allowed tag); insert an explicit
-  //    <br> so lines don't all run together into one unreadable paragraph.
-  //    This is a partial mitigation, not a real code-listing renderer:
-  //    original indentation/whitespace is still not preserved.
+  //  Tables, listings and algorithms are preserved as-is by the sanitizer.
   function stripLatexmlArtifacts(clone) {
     clone.querySelectorAll(".ltx_tag_item, .ltx_listing_data").forEach((n) => n.remove());
-    clone.querySelectorAll(".ltx_listingline").forEach((n) => n.appendChild(document.createElement("br")));
   }
 
   function buildBibliography(doc) {
@@ -47,7 +42,7 @@
 
     const abstract = article.querySelector(".ltx_abstract");
     if (abstract) {
-      const clone = abstract.cloneNode(true);
+      const clone = CSR.util.cloneWithStyles(abstract);
       clone.querySelectorAll(":scope > .ltx_title").forEach((n) => n.remove());
       stripLatexmlArtifacts(clone);
       tagCitations(clone);
@@ -64,7 +59,7 @@
       if (sec.parentElement.closest(".ltx_section")) return;
       const titleEl = sec.querySelector(":scope > .ltx_title");
       const title = titleEl ? CSR.util.textContentOf(titleEl) : "";
-      const clone = sec.cloneNode(true);
+      const clone = CSR.util.cloneWithStyles(sec);
       const cloneTitle = clone.querySelector(":scope > .ltx_title");
       if (cloneTitle) cloneTitle.remove();
       stripLatexmlArtifacts(clone);
@@ -78,7 +73,7 @@
 
     const biblio = article.querySelector(".ltx_bibliography");
     if (biblio) {
-      const clone = biblio.cloneNode(true);
+      const clone = CSR.util.cloneWithStyles(biblio);
       const cloneTitle = clone.querySelector(".ltx_title");
       if (cloneTitle) cloneTitle.remove();
       stripLatexmlArtifacts(clone);

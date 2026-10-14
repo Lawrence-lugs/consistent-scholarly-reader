@@ -55,21 +55,16 @@ h2.s{font-family:'Instrument Sans',system-ui,sans-serif;font-weight:600;font-siz
   background:#FBFCFB;border:1px solid #CBD6D3;border-radius:6px;padding:.5rem .65rem;
   box-shadow:0 4px 14px rgba(22,37,44,.18);pointer-events:none;
 }
-/* Layout + TOC sidebar */
-.csr-layout{display:grid;grid-template-columns:15rem minmax(0,72ch);gap:2.5rem;justify-content:center;align-items:start}
-.csr-layout.csr-no-toc{grid-template-columns:minmax(0,72ch)}
+/* TOC: floats in the left margin, never affects the content column */
 .csr-page h2.s,.csr-page h3{scroll-margin-top:1rem}
 .csr-toc{
-  position:sticky;top:1.5rem;max-height:calc(100vh - 8rem);overflow-y:auto;
+  display:none;position:absolute;top:4.25rem;left:1rem;width:14rem;
+  max-height:calc(100% - 5.75rem);overflow-y:auto;
   font-family:'Instrument Sans',system-ui,sans-serif;font-size:.82rem;line-height:1.35;
-  padding-right:.5rem;
 }
-.csr-toc-title{font-size:.7rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#5B6C73;margin:0 0 .6rem}
+.csr-toc-title{font-size:.7rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#5B6C73;margin:0 0 .6rem .6rem}
 .csr-toc ul{list-style:none;margin:0;padding:0}
-.csr-toc a{
-  display:block;padding:.28rem .6rem;color:#5B6C73;text-decoration:none;
-  border-left:2px solid #CBD6D3;
-}
+.csr-toc a{display:block;padding:.28rem .6rem;color:#5B6C73;text-decoration:none;border-left:2px solid #CBD6D3}
 .csr-toc a.sub{padding-left:1.3rem;font-size:.78rem}
 .csr-toc a:hover{color:#16252C;background:rgba(22,37,44,.04)}
 .csr-toc a.active{color:#0E6B73;border-left-color:#0E6B73;font-weight:600}
@@ -77,15 +72,14 @@ h2.s{font-family:'Instrument Sans',system-ui,sans-serif;font-weight:600;font-siz
   display:none;appearance:none;border:1px solid #CBD6D3;background:#FBFCFB;border-radius:6px;
   height:1.8rem;padding:0 .6rem;cursor:pointer;font:inherit;color:#16252C;
 }
-@media (max-width:1050px){
-  .csr-layout,.csr-layout.csr-no-toc{grid-template-columns:minmax(0,72ch)}
-  .csr-toc-btn{display:inline-block}
-  .csr-toc{display:none}
-  .csr-root.csr-toc-open .csr-toc{
-    display:block;position:fixed;top:3.1rem;left:0;bottom:0;width:17rem;max-height:none;
-    background:#FBFCFB;border-right:1px solid #CBD6D3;padding:1rem;z-index:2;
-    box-shadow:4px 0 14px rgba(22,37,44,.12);
-  }
+/* enough free margin: show TOC in place */
+.csr-root.csr-toc-wide .csr-toc{display:block}
+/* not enough margin: button + drawer */
+.csr-root:not(.csr-toc-wide) .csr-toc-btn{display:inline-block}
+.csr-root:not(.csr-toc-wide).csr-toc-open .csr-toc{
+  display:block;top:3.1rem;left:0;bottom:0;width:17rem;max-height:none;
+  background:#FBFCFB;border-right:1px solid #CBD6D3;padding:1rem;z-index:2;
+  box-shadow:4px 0 14px rgba(22,37,44,.12);
 }
 `;
 
@@ -134,10 +128,10 @@ h2.s{font-family:'Instrument Sans',system-ui,sans-serif;font-weight:600;font-siz
     });
   }
 
-    // Collect h2 section titles (+ optional h3s inside section content).
+  // Collect h2 section titles (+ optional h3s inside section content).
   const INCLUDE_SUBSECTIONS = true;
 
-  function buildToc(main, scroll, root) {
+  function buildToc(main, scroll, root, page) {
     const items = [];
     let n = 0;
     const add = (el, sub) => {
@@ -208,6 +202,20 @@ h2.s{font-family:'Instrument Sans',system-ui,sans-serif;font-weight:600;font-siz
     }, { passive: true });
     requestAnimationFrame(update);
 
+    // Show the floating TOC only if the left margin beside the centred
+    // column is wide enough for it (1rem offset + 14rem panel + 1.5rem gap).
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+    const need = 16.5 * rem;
+    new ResizeObserver(() => {
+      const room = page.getBoundingClientRect().left - scroll.getBoundingClientRect().left;
+      root.classList.toggle("csr-toc-wide", room >= need);
+    }).observe(scroll); // fires once on observe, so the initial state is set too
+
+    // The panel sits over the margin, so pass wheel scrolling through to the article
+    toc.addEventListener("wheel", (e) => {
+      if (toc.scrollHeight <= toc.clientHeight) scroll.scrollBy({ top: e.deltaY });
+    }, { passive: true });
+
     return toc;
   }
 
@@ -233,11 +241,6 @@ h2.s{font-family:'Instrument Sans',system-ui,sans-serif;font-weight:600;font-siz
     closeBtn.setAttribute("aria-label", "Exit reading mode");
     closeBtn.textContent = "\u00d7";
     closeBtn.addEventListener("click", () => CSR.teardownOverlay());
-    const tocBtn = document.createElement("button");
-    tocBtn.className = "csr-toc-btn";
-    tocBtn.textContent = "Contents";
-    tocBtn.addEventListener("click", () => root.classList.toggle("csr-toc-open"));
-    topbar.appendChild(tocBtn);
     topbar.appendChild(closeBtn);
     root.appendChild(topbar);
 
@@ -259,16 +262,20 @@ h2.s{font-family:'Instrument Sans',system-ui,sans-serif;font-weight:600;font-siz
       main.appendChild(sec.content);
     });
     page.appendChild(main);
-
-    const layout = document.createElement("div");
-    layout.className = "csr-layout";
-    const toc = buildToc(main, scroll, root);
-    if (toc) layout.appendChild(toc);
-    else layout.classList.add("csr-no-toc");
-    layout.appendChild(page);
-    scroll.appendChild(layout);
-    
+    scroll.appendChild(page);
     root.appendChild(scroll);
+
+    // Floating TOC lives directly under .csr-root (position:fixed => containing
+    // block), so the content column above is untouched.
+    const toc = buildToc(main, scroll, root, page);
+    if (toc) {
+      root.appendChild(toc);
+      const tocBtn = document.createElement("button");
+      tocBtn.className = "csr-toc-btn";
+      tocBtn.textContent = "Contents";
+      tocBtn.addEventListener("click", () => root.classList.toggle("csr-toc-open"));
+      topbar.insertBefore(tocBtn, closeBtn);
+    }
     shadow.appendChild(root);
 
     document.documentElement.appendChild(host);

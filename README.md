@@ -1,12 +1,15 @@
 # Consistent Reader Extension for Academic Sites
 
+Decent support
+
+- Arxiv
+
 Planned support:
 
 - IEEE
 - Nature
 - ACM
 - Science
-- Arxiv
 
 Publisher sites with HTML versions are good for accessibility. However, some sites have distractingly large sidebars and other unimportant bloat floating around the actual paper content, making it more difficult to focus. This discourages the use of the HTML version and readers end up simply going back to the PDF which has a focused, clean format.
 

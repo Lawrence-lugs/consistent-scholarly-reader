@@ -101,6 +101,29 @@
   // equations), code listings and pseudocode/algorithm figures.
   const PRESERVED_CLASSES = ["ltx_listing", "ltx_float_algorithm", "ltx_algorithm"];
 
+  // LaTeXML expresses inline formatting as classes on <span class="ltx_text ...">
+  // rather than semantic tags. Classes are stripped by copyAllowedAttrs, so map
+  // them onto allowed semantic tags to keep the formatting.
+  const FORMAT_CLASS_TAGS = [
+    ["ltx_font_typewriter", "code"],
+    ["ltx_font_bold", "strong"],
+    ["ltx_font_italic", "em"],
+  ];
+
+  function wrapFormatting(node, out) {
+    // Only spans: <em>/<strong>/<code> already carry their meaning in the tag.
+    if (node.tagName.toLowerCase() !== "span") return out;
+    let result = out;
+    for (const [cls, wrapTag] of FORMAT_CLASS_TAGS) {
+      if (node.classList.contains(cls)) {
+        const w = document.createElement(wrapTag);
+        w.appendChild(result);
+        result = w;
+      }
+    }
+    return result;
+  }
+
   function isPreservedBlock(node, tag) {
     if (tag === "table") return true;
     return PRESERVED_CLASSES.some((c) => node.classList.contains(c));
@@ -236,7 +259,7 @@
     if (!out.childNodes.length && tag !== "br" && tag !== "hr" && tag !== "img") {
       return null;
     }
-    return out;
+    return wrapFormatting(node, out);   // was: return out;
   }
 
   /**

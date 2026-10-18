@@ -5,12 +5,21 @@
   "use strict";
   const CSR = window.CSR;
 
-  CSR.findParsedArticle = function findParsedArticle(doc) {
+  CSR.findParsedArticle = function findParsedArticle(doc, ctx) {
     doc = doc || document;
     for (const parser of CSR.parsers) {
-      if (!parser.detect(doc)) continue;
-      const result = parser.parse(doc);
+      if (!parser.detect(doc, ctx)) continue;
+      const result = parser.parse(doc, ctx);
       if (result) return result;
+    }
+    // No parser detected the site by URL: try content-based sniffing (for
+    // pasted or uploaded documents without a URL). Site parsers opt in with a
+    // sniff() method; the app's generic parser is registered last.
+    for (const parser of CSR.parsers) {
+      if (parser.sniff && parser.sniff(doc)) {
+        const result = parser.parse(doc, ctx);
+        if (result) return result;
+      }
     }
     return null;
   };

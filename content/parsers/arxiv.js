@@ -5,8 +5,9 @@
   "use strict";
   const CSR = window.CSR;
 
-  function detect(doc) {
-    return /^https?:\/\/(arxiv\.org|ar5iv\.labs\.arxiv\.org)\//.test(doc.location.href);
+  function detect(doc, ctx) {
+    const { url } = CSR.util.ctx(doc, ctx);
+    return url ? /^https?:\/\/(arxiv\.org|ar5iv\.labs\.arxiv\.org)\//.test(url) : false;
   }
 
   function tagCitations(root) {
@@ -24,20 +25,20 @@
     clone.querySelectorAll(".ltx_tag_item, .ltx_listing_data").forEach((n) => n.remove());
   }
 
-  function buildBibliography(doc) {
+  function buildBibliography(doc, base) {
     const list = doc.querySelector(".ltx_biblist, .ltx_bibliography");
     const map = {};
     if (!list) return map;
     list.querySelectorAll(".ltx_bibitem[id]").forEach((item) => {
       const clone = item.cloneNode(true);
       clone.querySelectorAll(".ltx_tag").forEach((n) => n.remove());
-      const frag = CSR.util.cloneClean(clone, { baseURI: doc.baseURI });
+      const frag = CSR.util.cloneClean(clone, { baseURI: base });
       map[item.id] = { id: item.id, text: CSR.util.textContentOf(frag) };
     });
     return map;
   }
 
-  function sectionsFrom(doc, article) {
+  function sectionsFrom(doc, article, base) {
     const out = [];
 
     const abstract = article.querySelector(".ltx_abstract");
@@ -49,7 +50,7 @@
       out.push({
         id: "abstract",
         title: "Abstract",
-        content: CSR.util.cloneClean(clone, { baseURI: doc.baseURI }),
+        content: CSR.util.cloneClean(clone, { baseURI: base }),
       });
     }
 
@@ -67,7 +68,7 @@
       out.push({
         id: sec.id || CSR.util.slugify(title),
         title,
-        content: CSR.util.cloneClean(clone, { baseURI: doc.baseURI }),
+        content: CSR.util.cloneClean(clone, { baseURI: base }),
       });
     });
 
@@ -80,15 +81,21 @@
       out.push({
         id: "references",
         title: "References",
-        content: CSR.util.cloneClean(clone, { baseURI: doc.baseURI }),
+        content: CSR.util.cloneClean(clone, { baseURI: base }),
       });
     }
 
     return out;
   }
 
-  function parse(doc) {
+  // Content-based detection for documents without a URL (paste / upload).
+  function sniff(doc) {
+    return !!doc.querySelector(".ltx_document");
+  }
+
+  function parse(doc, ctx) {
     doc = doc || document;
+    const { url, base } = CSR.util.ctx(doc, ctx);
     const article = doc.querySelector(".ltx_document");
     if (!article) return null; // e.g. arxiv.org/abs/* has no full-text body
 
@@ -104,7 +111,7 @@
       : null;
 
     const venueParts = [];
-    const arxivId = m.arxivId || (doc.location.href.match(/(\d{4}\.\d{4,5})(v\d+)?/) || [])[0];
+    const arxivId = m.arxivId || (url ? (url.match(/(\d{4}\.\d{4,5})(v\d+)?/) || [])[0] : null);
     if (arxivId) venueParts.push("arXiv:" + arxivId);
     if (m.date) venueParts.push(m.date);
 
@@ -113,11 +120,12 @@
       title: title || "Untitled",
       authors,
       venueLine: venueParts.join(" \u00b7 "),
-      sourceUrl: doc.location.href,
-      sections: sectionsFrom(doc, article),
-      bibliography: buildBibliography(doc),
+      sourceUrl: url,
+      ids: { arxiv: m.arxivId || null, doi: m.doi || null },
+      sections: sectionsFrom(doc, article, base),
+      bibliography: buildBibliography(doc, base),
     };
   }
 
-  CSR.parsers.push({ id: "arxiv", detect, parse });
+  CSR.parsers.push({ id: "arxiv", detect, parse, sniff });
 })();

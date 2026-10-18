@@ -20,8 +20,14 @@
   "use strict";
   const CSR = window.CSR;
 
-  function detect(doc) {
-    return /(^|\.)nature\.com$/.test(doc.location.hostname);
+  function detect(doc, ctx) {
+    const { url } = CSR.util.ctx(doc, ctx);
+    return url ? /(^|\.)nature\.com$/.test(new URL(url).hostname) : false;
+  }
+
+  // Content-based detection for documents without a URL (paste / upload).
+  function sniff(doc) {
+    return !!CSR.util.genericArticleBody(doc, BODY_SELECTORS);
   }
 
   const BODY_SELECTORS = ["div.c-article-body", "div[data-component='article-body']"];
@@ -42,19 +48,19 @@
     });
   }
 
-  function buildBibliography(doc) {
+  function buildBibliography(doc, base) {
     const list = CSR.util.genericBibliography(doc, REF_LIST_SELECTORS);
     const map = {};
     if (!list) return map;
     list.querySelectorAll(".c-article-references__text[id], li[id]").forEach((item) => {
       const clone = item.cloneNode(true);
-      const frag = CSR.util.cloneClean(clone, { baseURI: doc.baseURI });
+      const frag = CSR.util.cloneClean(clone, { baseURI: base });
       map[item.id] = { id: item.id, text: CSR.util.textContentOf(frag) };
     });
     return map;
   }
 
-  function sectionsFrom(doc, body) {
+  function sectionsFrom(doc, body, base) {
     const out = [];
     const sections = Array.from(body.querySelectorAll("section")).filter(
       (sec) => !sec.matches(NON_CONTENT_SECTION_SELECTOR)
@@ -70,7 +76,7 @@
         out.push({
           id: sec.id || CSR.util.slugify(title),
           title,
-          content: CSR.util.cloneClean(clone, { baseURI: doc.baseURI }),
+          content: CSR.util.cloneClean(clone, { baseURI: base }),
         });
       });
     } else {
@@ -78,13 +84,14 @@
       const clone = CSR.util.cloneWithStyles(body);
       clone.querySelectorAll(NON_CONTENT_SECTION_SELECTOR).forEach((n) => n.remove());
       tagCitations(clone);
-      out.push({ id: "body", title: "", content: CSR.util.cloneClean(clone, { baseURI: doc.baseURI }) });
+      out.push({ id: "body", title: "", content: CSR.util.cloneClean(clone, { baseURI: base }) });
     }
     return out;
   }
 
-  function parse(doc) {
+  function parse(doc, ctx) {
     doc = doc || document;
+    const { url, base } = CSR.util.ctx(doc, ctx);
     const body = CSR.util.genericArticleBody(doc, BODY_SELECTORS);
     if (!body) return null;
 
@@ -99,11 +106,12 @@
       title: m.title || CSR.util.textContentOf(doc.querySelector("h1")) || "Untitled",
       authors: m.authors.length ? m.authors.join(", ") : null,
       venueLine: venueParts.join(" \u00b7 "),
-      sourceUrl: doc.location.href,
-      sections: sectionsFrom(doc, body),
-      bibliography: buildBibliography(doc),
+      sourceUrl: url,
+      ids: { arxiv: m.arxivId || null, doi: m.doi || null },
+      sections: sectionsFrom(doc, body, base),
+      bibliography: buildBibliography(doc, base),
     };
   }
 
-  CSR.parsers.push({ id: "nature", detect, parse });
+  CSR.parsers.push({ id: "nature", detect, parse, sniff });
 })();

@@ -27,6 +27,7 @@
   const DROP_TAGS = new Set([
     "script", "style", "noscript", "button", "nav", "form", "iframe",
     "svg", // only kept verbatim when inside VERBATIM_TAGS check above
+    "foreignObject", // never trust embedded HTML inside an SVG figure
     "input", "select", "textarea", "dialog", "template",
   ]);
 
@@ -47,6 +48,10 @@
 
   function absUrl(url, base) {
     if (!url) return url;
+    // Fragment-only references (e.g. <use href="#id">) must stay untouched:
+    // resolving them against the page URL turns them into absolute URLs and
+    // breaks the reference. Callers pass the document base for everything else.
+    if (url.startsWith("#")) return url;
     try {
       const resolved = new URL(url, base || document.baseURI);
       if (!SAFE_HREF_SCHEMES.has(resolved.protocol)) return null;
@@ -56,6 +61,30 @@
     }
   }
   CSR.util.absUrl = absUrl;
+
+  /**
+   * Resolve a document's URL / host / base URL from an explicit context when
+   * one is provided, falling back to the live document, then to safe nulls.
+   *
+   * A `DOMParser` document has `location === null` and `baseURI` equal to the
+   * app's own URL, so never resolve relative URLs against it unconditionally.
+   *
+   * @param {Document} doc
+   * @param {object} [ctx] - {url?, host?, base?}
+   * @returns {{url:string|null, host:string|null, base:string}}
+   */
+  function ctx(doc, ctx) {
+    const url =
+      (ctx && ctx.url != null) ? String(ctx.url) :
+      (doc && doc.location && doc.location.href) ? String(doc.location.href) :
+      null;
+    const host = url ? (new URL(url).hostname) : null;
+    const base = url
+      ? url
+      : (doc && doc.baseURI != null ? String(doc.baseURI) : "about:blank");
+    return { url, host, base };
+  }
+  CSR.util.ctx = ctx;
 
   function slugify(text, fallback) {
     const base = (text || "").toLowerCase().trim()
@@ -169,6 +198,10 @@
    */
   function cloneWithStyles(root) {
     const clone = root.cloneNode(true);
+    // Detached clones (e.g. from a parsed document) have no computed style:
+    // return the plain clone rather than calling getComputedStyle, which is
+    // meaningless off the live page.
+    if (!root.isConnected) return clone;
     const src = Array.from(root.querySelectorAll(SNAPSHOT_SELECTOR));
     const dst = Array.from(clone.querySelectorAll(SNAPSHOT_SELECTOR));
     for (let i = 0; i < src.length && i < dst.length; i++) snapshotPair(src[i], dst[i]);
@@ -210,7 +243,7 @@
     const tag = node.tagName.toLowerCase();
 
     if (VERBATIM_TAGS.has(tag)) {
-      return node.cloneNode(true);
+      return cloneVerbatimSafe(node, baseURI);
     }
     if (isPreservedBlock(node, tag)) {
       return cloneVerbatimSafe(node, baseURI);

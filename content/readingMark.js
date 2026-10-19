@@ -175,6 +175,9 @@
     idx = Math.max(0, Math.min(units.length - 1, i));
     units[idx].classList.add("on");
     if (scroll) ensure(units[idx], fast);
+    if (typeof CSR.readingMark.onCitationUnitChange === "function") {
+      CSR.readingMark.onCitationUnitChange(units[idx]);
+    }
   }
   function activate(i) {
     on = true;
@@ -232,6 +235,10 @@
     get idx() {
       return idx;
     },
+    // Set by renderOverlay to drive the citation sidebar as the mark moves.
+    // A plain data property (defined once here) so repeated attach()/teardown
+    // cycles just reassign it instead of throwing "Cannot redefine property".
+    onCitationUnitChange: null,
     attach(shadowRoot, rootEl) {
       shadow = shadowRoot;
       root = rootEl;

@@ -40,7 +40,20 @@
     const headings = Array.from(main.querySelectorAll("h2.s"));
     const heading = headings.find((h) => h.id === sectionId);
     if (!heading) return 0;
-    const offset = heading.offsetTop || headings.indexOf(heading) * 200;
+    // getBoundingClientRect is relative to the viewport; subtract the scroll
+    // container's rect so the offset is relative to .csr-scroll (the actual
+    // scroller). .csr-root is position:fixed, so heading.offsetTop would be
+    // relative to the viewport/body -- a mixed coordinate frame that lands in
+    // the wrong place in real Chrome.
+    const headingRect = heading.getBoundingClientRect();
+    const scrollRect = scroll.getBoundingClientRect();
+    let offset = headingRect.top - scrollRect.top;
+    // Zero rects (Node shim, or element not yet laid out): fall back to a
+    // synthetic position based on section order so the reader lands below the
+    // top for non-first sections.
+    if (!offset && headings.indexOf(heading) > 0) {
+      offset = headings.indexOf(heading) * 200;
+    }
     scroll.scrollTop = offset;
     return offset;
   }
@@ -350,6 +363,18 @@ h2.s{font-family:'Instrument Sans',system-ui,sans-serif;font-weight:600;font-siz
     CSR.readingMark.attach(shadow, root);
     CSR.citationPeek.attach(shadow, article.bibliography);
 
+    // Issue #9: citation sidebar — wire into the reading mark so the panel
+    // updates as the mark moves. citationSidebar.js is registered in the
+    // manifest, so CSR.citationSidebar exists in the real extension; guard
+    // for sandboxes that load render.js without it.
+    if (CSR.citationSidebar) {
+      CSR.citationSidebar.attach(shadow, root, article.bibliography);
+      if (CSR.readingMark.idx >= 0) {
+        CSR.citationSidebar.setActiveUnit(CSR.readingMark.units[CSR.readingMark.idx]);
+      }
+      CSR.readingMark.onCitationUnitChange = (unit) => CSR.citationSidebar.setActiveUnit(unit);
+    }
+
     return { host, shadow, root, scroll };
   };
 
@@ -366,6 +391,11 @@ h2.s{font-family:'Instrument Sans',system-ui,sans-serif;font-weight:600;font-siz
     }
     CSR.readingMark.detach();
     CSR.citationPeek.detach();
+    // Issue #9: drop the citation sidebar and stop driving it from the mark.
+    if (CSR.citationSidebar) {
+      CSR.citationSidebar.detach();
+      CSR.readingMark.onCitationUnitChange = null;
+    }
     // Restore the page scroll captured on enter (issue #7).
     if (capturedPageScroll !== null) {
       document.documentElement.scrollTop = capturedPageScroll;

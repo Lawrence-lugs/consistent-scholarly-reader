@@ -58,6 +58,32 @@
     return offset;
   }
 
+  // Detect which publisher-page section is closest to the current scroll
+  // position, so first-time entry to reading mode can open the reader at
+  // approximately the same place the user was reading. Returns the section's
+  // anchor id (matching article.sections[].id) or null.
+  function capturePageSectionId(doc) {
+    const y = currentPageScroll();
+    const headings = Array.from(doc.querySelectorAll("h1, h2, h3, h4, h5, h6"));
+    if (!headings.length) return null;
+    const withPos = headings.map((h) => {
+      const rect = h.getBoundingClientRect();
+      const absTop = rect.top + y; // viewport-relative top + document scroll = absolute top
+      return { el: h, id: h.id || null, top: absTop };
+    });
+    let lastAtOrAbove = null;
+    let firstBelow = null;
+    for (const wp of withPos) {
+      if (wp.top <= y + 64) { // tolerance for fixed topbar
+        if (!lastAtOrAbove || wp.top > lastAtOrAbove.top) lastAtOrAbove = wp;
+      } else if (!firstBelow) {
+        firstBelow = wp;
+      }
+    }
+    const target = lastAtOrAbove || firstBelow || withPos[0];
+    return target.id ? String(target.id) : null;
+  }
+
   // Clamp preserved blocks (tables/figures) whose computed width overshoots the
   // 72ch reader column so they scroll horizontally instead of breaking layout.
   function clampOversizedBlocks(root) {
@@ -125,6 +151,53 @@ h2.s{font-family:'Instrument Sans',system-ui,sans-serif;font-weight:600;font-siz
   font-family:'Instrument Sans',system-ui,sans-serif;font-size:.78rem;line-height:1.4;color:#16252C;
   background:#FBFCFB;border:1px solid #CBD6D3;border-radius:6px;padding:.5rem .65rem;
   box-shadow:0 4px 14px rgba(22,37,44,.18);pointer-events:none;
+}
+/* Citation sidebar (issue #9): right panel layered above the reader */
+.csr-citation-sidebar {
+  position: fixed;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 24rem;
+  max-width: 40vw;
+  background: #FBFCFB;
+  border-left: 1px solid #CBD6D3;
+  z-index: 2147483648;
+  overflow-y: auto;
+  font-family: 'Instrument Sans', system-ui, sans-serif;
+  font-size: 0.85rem;
+  color: #16252C;
+  display: flex;
+  flex-direction: column;
+}
+.csr-citation-list {
+  margin: 0;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  flex: 0 0 auto;
+}
+.csr-citation-item {
+  appearance: none;
+  border: 1px solid #CBD6D3;
+  background: #FBFCFB;
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  font: inherit;
+  font-size: 0.8rem;
+  color: #16252C;
+  text-align: left;
+  cursor: pointer;
+  line-height: 1.4;
+}
+.csr-citation-item:hover {
+  background: rgba(22,37,44,.04);
+  border-left-color: #0E6B73;
+}
+.csr-citation-item:focus {
+  outline: 2px solid #0E6B73;
+  outline-offset: -2px;
 }
 /* TOC: floats in the left margin, never affects the content column */
 .csr-page h2.s,.csr-page h3{scroll-margin-top:1rem}
@@ -294,6 +367,11 @@ h2.s{font-family:'Instrument Sans',system-ui,sans-serif;font-weight:600;font-siz
     ensureFonts();
     // Capture the page scroll on enter so teardown can restore it (issue #7).
     capturedPageScroll = currentPageScroll();
+    // First entry: map the page's in-view section to a reader anchor so the
+    // reader opens where the user was reading (issue #7).
+    if (!readerLocation.sectionId) {
+      readerLocation = { sectionId: capturePageSectionId(document) || null };
+    }
     const host = document.createElement("div");
     host.id = "csr-overlay-host";
     const shadow = host.attachShadow({ mode: "open" });

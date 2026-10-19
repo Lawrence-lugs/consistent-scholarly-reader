@@ -5,6 +5,59 @@
   "use strict";
   const CSR = window.CSR;
 
+  // Persistent reader location across open/close (issue #7): the section that
+  // was reading-marked when the overlay was last torn down, so re-opening can
+  // position the reader at the same place; and the page scroll captured on the
+  // current enter so teardown can restore it (bidirectional, mapped by section
+  // anchor rather than raw pixels so it survives different DOMs).
+  let readerLocation = { sectionId: null };
+  let capturedPageScroll = null;
+  let lastMain = null;
+
+  function currentPageScroll() {
+    return document.documentElement ? document.documentElement.scrollTop : 0;
+  }
+
+  // Section id (heading anchor) that contains `node` within `main`. Mirrors the
+  // reader's structure: main children alternate h2.s headings + content blocks.
+  function sectionIdForNode(node, main) {
+    let block = node;
+    while (block && block.parentNode !== main) block = block.parentNode;
+    if (!block) return null;
+    let lastH2 = null;
+    for (const child of main.childNodes) {
+      if (child === block) break;
+      if (child.nodeType === 1 && child.tagName === "H2" && child.classList.contains("s")) lastH2 = child;
+    }
+    return lastH2 ? lastH2.id : null;
+  }
+
+  // Scroll `.csr-scroll` to the section whose heading has `sectionId`. Uses the
+  // heading's real offset when available, otherwise a synthetic position based
+  // on section order so the reader lands below the top for non-first sections.
+  function scrollToSectionId(scroll, main, sectionId) {
+    if (!sectionId) return 0;
+    const headings = Array.from(main.querySelectorAll("h2.s"));
+    const heading = headings.find((h) => h.id === sectionId);
+    if (!heading) return 0;
+    const offset = heading.offsetTop || headings.indexOf(heading) * 200;
+    scroll.scrollTop = offset;
+    return offset;
+  }
+
+  // Clamp preserved blocks (tables/figures) whose computed width overshoots the
+  // 72ch reader column so they scroll horizontally instead of breaking layout.
+  function clampOversizedBlocks(root) {
+    const limit = 72 * (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16);
+    root.querySelectorAll("table, figure").forEach((el) => {
+      const width = parseFloat(getComputedStyle(el).width) || 0;
+      if (width > limit) {
+        el.style.maxWidth = "100%";
+        el.style.overflowX = "auto";
+      }
+    });
+  }
+
   const STYLE = `
 :host{all:initial}
 .csr-root{
@@ -42,6 +95,11 @@ h2.s{font-family:'Instrument Sans',system-ui,sans-serif;font-weight:600;font-siz
 .csr-page figcaption{font-size:.8rem;color:#5B6C73;margin-top:.4rem}
 .csr-page table{border-collapse:collapse;width:100%;font-size:.88rem;margin:1rem 0}
 .csr-page th,.csr-page td{border-bottom:1px solid #CBD6D3;padding:.45rem .5rem;text-align:left;vertical-align:top}
+/* Issue #10: preserved blocks (tables/figures) that overshoot the 72ch column
+   scroll horizontally instead of breaking the layout. img/svg inside figures
+   are left alone (they already scale via width: 100%). */
+.csr-page figure{max-width:100%;overflow-x:auto}
+.csr-page table{max-width:100%;overflow-x:auto}
 .csr-page a{color:#0E6B73}
 .csr-page sup a[data-csr-cite-ref],.csr-page a[data-csr-cite-ref]{cursor:help;text-decoration:underline dotted}
 /* Reading mark */
@@ -221,6 +279,8 @@ h2.s{font-family:'Instrument Sans',system-ui,sans-serif;font-weight:600;font-siz
 
   CSR.renderOverlay = function renderOverlay(article) {
     ensureFonts();
+    // Capture the page scroll on enter so teardown can restore it (issue #7).
+    capturedPageScroll = currentPageScroll();
     const host = document.createElement("div");
     host.id = "csr-overlay-host";
     const shadow = host.attachShadow({ mode: "open" });
@@ -281,6 +341,12 @@ h2.s{font-family:'Instrument Sans',system-ui,sans-serif;font-weight:600;font-siz
     document.documentElement.appendChild(host);
     document.documentElement.style.overflow = "hidden";
 
+    lastMain = main;
+    clampOversizedBlocks(main); // issue #10
+    if (readerLocation && readerLocation.sectionId) {
+      scrollToSectionId(scroll, main, readerLocation.sectionId); // issue #7
+    }
+
     CSR.readingMark.attach(shadow, root);
     CSR.citationPeek.attach(shadow, article.bibliography);
 
@@ -290,8 +356,21 @@ h2.s{font-family:'Instrument Sans',system-ui,sans-serif;font-weight:600;font-siz
   CSR.teardownOverlay = function teardownOverlay() {
     const host = document.getElementById("csr-overlay-host");
     if (!host) return;
+    // Remember the reading-marked section before detaching (issue #7), mapped
+    // by section anchor so it survives the reader's rebuilt DOM.
+    if (CSR.readingMark && CSR.readingMark.units && CSR.readingMark.idx >= 0 && lastMain) {
+      const unit = CSR.readingMark.units[CSR.readingMark.idx];
+      readerLocation = { sectionId: sectionIdForNode(unit, lastMain) || null };
+    } else {
+      readerLocation = { sectionId: null };
+    }
     CSR.readingMark.detach();
     CSR.citationPeek.detach();
+    // Restore the page scroll captured on enter (issue #7).
+    if (capturedPageScroll !== null) {
+      document.documentElement.scrollTop = capturedPageScroll;
+      capturedPageScroll = null;
+    }
     host.remove();
     removeFonts();
     document.documentElement.style.overflow = "";

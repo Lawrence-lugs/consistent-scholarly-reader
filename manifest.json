@@ -41,6 +41,7 @@
         "content/render.js",
         "content/readingMark.js",
         "content/citationPeek.js",
+        "content/citationSidebar.js",
         "content/inject.js"
       ],
       "run_at": "document_idle"

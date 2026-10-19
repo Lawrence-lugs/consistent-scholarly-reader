@@ -221,7 +221,17 @@
     else activate(i);
   }
 
+  // Expose the active-unit state (live) so renderOverlay's teardown can
+  // capture the reading-marked section before detaching (issue #7). Defined
+  // once at object creation; attach()/detach() mutate the module variables
+  // these getters close over.
   CSR.readingMark = {
+    get units() {
+      return units;
+    },
+    get idx() {
+      return idx;
+    },
     attach(shadowRoot, rootEl) {
       shadow = shadowRoot;
       root = rootEl;

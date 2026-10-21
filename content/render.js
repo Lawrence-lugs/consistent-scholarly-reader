@@ -14,6 +14,14 @@
   let capturedPageScroll = null;
   let lastMain = null;
 
+  // Build stamp: short commit hash of the source this content script was built
+  // from. Open DevTools Console on the publisher page and inspect
+  // `CSR.readerCommit` to verify which build is actually loaded.
+  // NOTE: the working tree is dirty (uncommitted fixes), so treat this as
+  // "145a777 + uncommitted changes" until you commit.
+  CSR.readerCommit = "145a777";
+  console.debug("Consistent Scholarly Reader content script build", CSR.readerCommit);
+
   function currentPageScroll() {
     return document.documentElement ? document.documentElement.scrollTop : 0;
   }
@@ -58,18 +66,37 @@
     return offset;
   }
 
+  // Resolve the anchor id for the section containing heading `h`. Most
+  // publishers (arXiv, IEEE, Science) put the section id on a container
+  // element around the heading (e.g. .ltx_section, .section), not on the
+  // heading itself; ACM instead puts it on the heading. Prefer the nearest
+  // id'd ancestor of the heading, falling back to the heading's own id, so
+  // the returned id matches the reader's section id (parsers key off sec.id).
+  function sectionIdForHeading(h) {
+    let node = h.parentElement;
+    while (node && node.nodeType === 1) {
+      if (node.id) return node.id;
+      node = node.parentElement;
+    }
+    return h.id || null;
+  }
+
   // Detect which publisher-page section is closest to the current scroll
   // position, so first-time entry to reading mode can open the reader at
-  // approximately the same place the user was reading. Returns the section's
-  // anchor id (matching article.sections[].id) or null.
-  function capturePageSectionId(doc) {
+  // approximately the same place the user was reading. The heading's anchor id
+  // is resolved from its section container (the nearest id'd ancestor; see
+  // sectionIdForHeading) because arXiv/IEEE/Science carry the section id on the
+  // wrapper around the heading rather than on the heading element itself.
+  // Returns the closest heading (with its resolved id and absolute top), or
+  // null when the page has no headings at all.
+  function capturePageSection(doc) {
     const y = currentPageScroll();
     const headings = Array.from(doc.querySelectorAll("h1, h2, h3, h4, h5, h6"));
     if (!headings.length) return null;
     const withPos = headings.map((h) => {
       const rect = h.getBoundingClientRect();
       const absTop = rect.top + y; // viewport-relative top + document scroll = absolute top
-      return { el: h, id: h.id || null, top: absTop };
+      return { el: h, id: sectionIdForHeading(h), top: absTop };
     });
     let lastAtOrAbove = null;
     let firstBelow = null;
@@ -80,8 +107,17 @@
         firstBelow = wp;
       }
     }
-    const target = lastAtOrAbove || firstBelow || withPos[0];
-    return target.id ? String(target.id) : null;
+    return lastAtOrAbove || firstBelow || withPos[0];
+  }
+
+  // Ordinal of heading `el` among all page headings h1-h6 in document order.
+  // Used as a last-resort mapping when page sections carry no usable id: reader
+  // sections (h2.s) are rendered in article order, so the nth page section maps
+  // to reader h2.s[n] (best effort; may be off by the title/subsections).
+  function pageSectionOrdinal(el, doc) {
+    if (!el) return null;
+    const headings = Array.from(doc.querySelectorAll("h1, h2, h3, h4, h5, h6"));
+    return headings.indexOf(el);
   }
 
   // Clamp preserved blocks (tables/figures) whose computed width overshoots the
@@ -152,52 +188,30 @@ h2.s{font-family:'Instrument Sans',system-ui,sans-serif;font-weight:600;font-siz
   background:#FBFCFB;border:1px solid #CBD6D3;border-radius:6px;padding:.5rem .65rem;
   box-shadow:0 4px 14px rgba(22,37,44,.18);pointer-events:none;
 }
-/* Citation sidebar (issue #9): right panel layered above the reader */
-.csr-citation-sidebar {
-  position: fixed;
-  right: 0;
-  top: 0;
-  bottom: 0;
-  width: 24rem;
-  max-width: 40vw;
-  background: #FBFCFB;
-  border-left: 1px solid #CBD6D3;
-  z-index: 2147483648;
-  overflow-y: auto;
-  font-family: 'Instrument Sans', system-ui, sans-serif;
-  font-size: 0.85rem;
-  color: #16252C;
-  display: flex;
-  flex-direction: column;
+/* Citation sidebar (issue #9): floats in the right margin, mirroring the TOC */
+.csr-citation-sidebar{
+  position:fixed;top:4.25rem;right:1rem;width:14rem;
+  max-height:calc(100% - 5.75rem);overflow-y:auto;
+  display:block;background:none;border:0;z-index:2147483648;
+  font-family:'Instrument Sans',system-ui,sans-serif;font-size:.82rem;line-height:1.35;color:#16252C;
 }
-.csr-citation-list {
-  margin: 0;
-  padding: 1rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  flex: 0 0 auto;
+.csr-citation-list{margin:0;padding:0;list-style:none;display:flex;flex-direction:column}
+.csr-citation-list::before{
+  content:"Citations";margin:0 0 .6rem .6rem;
+  font-size:.7rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#5B6C73;
 }
-.csr-citation-item {
-  appearance: none;
-  border: 1px solid #CBD6D3;
-  background: #FBFCFB;
-  border-radius: 6px;
-  padding: 0.5rem 0.75rem;
-  font: inherit;
-  font-size: 0.8rem;
-  color: #16252C;
-  text-align: left;
-  cursor: pointer;
-  line-height: 1.4;
+.csr-citation-list:empty::before{display:none}
+.csr-citation-item{
+  display:block;width:100%;appearance:none;border:0;border-left:2px solid #CBD6D3;border-radius:0;
+  background:none;padding:.28rem .6rem;font:inherit;color:#5B6C73;text-align:left;cursor:pointer;
 }
-.csr-citation-item:hover {
-  background: rgba(22,37,44,.04);
-  border-left-color: #0E6B73;
-}
-.csr-citation-item:focus {
-  outline: 2px solid #0E6B73;
-  outline-offset: -2px;
+.csr-citation-item:hover{color:#16252C;background:rgba(22,37,44,.04)}
+.csr-citation-item:focus-visible{outline:2px solid #0E6B73;outline-offset:-2px}
+.csr-citation-item.active,.csr-citation-item[aria-current]{color:#0E6B73;border-left-color:#0E6B73;font-weight:600}
+/* not enough margin: dock as a drawer, like the TOC (and clear of the topbar's close button) */
+.csr-root:not(.csr-toc-wide) .csr-citation-sidebar{
+  top:3.1rem;bottom:0;max-height:none;width:17rem;padding:1rem;
+  background:#FBFCFB;border-left:1px solid #CBD6D3;box-shadow:-4px 0 14px rgba(22,37,44,.12);
 }
 /* TOC: floats in the left margin, never affects the content column */
 .csr-page h2.s,.csr-page h3{scroll-margin-top:1rem}
@@ -367,11 +381,18 @@ h2.s{font-family:'Instrument Sans',system-ui,sans-serif;font-weight:600;font-siz
     ensureFonts();
     // Capture the page scroll on enter so teardown can restore it (issue #7).
     capturedPageScroll = currentPageScroll();
-    // First entry: map the page's in-view section to a reader anchor so the
-    // reader opens where the user was reading (issue #7).
-    if (!readerLocation.sectionId) {
-      readerLocation = { sectionId: capturePageSectionId(document) || null };
-    }
+    // Determine the section to open at: the page's current in-view section,
+    // mapped by heading anchor, evaluated on EVERY entry so re-opening follows
+    // where the user is now reading rather than a stale reading mark from a
+    // previous session (issue #7). Prefer the section's anchor id (matches the
+    // reader's h2.s ids, which parsers key off sec.id). Only when the page has
+    // no usable heading anchor fall back to the section saved from the last
+    // teardown, then to ordinal mapping so the reader never opens at the top
+    // just because the page's sections lack ids.
+    const pageSection = capturePageSection(document);
+    const sectionId = (pageSection && pageSection.id) || readerLocation.sectionId || null;
+    const sectionOrdinal = pageSection ? pageSectionOrdinal(pageSection.el, document) : null;
+    readerLocation = { sectionId, sectionOrdinal };
     const host = document.createElement("div");
     host.id = "csr-overlay-host";
     const shadow = host.attachShadow({ mode: "open" });
@@ -434,8 +455,18 @@ h2.s{font-family:'Instrument Sans',system-ui,sans-serif;font-weight:600;font-siz
 
     lastMain = main;
     clampOversizedBlocks(main); // issue #10
-    if (readerLocation && readerLocation.sectionId) {
-      scrollToSectionId(scroll, main, readerLocation.sectionId); // issue #7
+    if (sectionId) {
+      scrollToSectionId(scroll, main, sectionId); // issue #7
+    } else if (sectionOrdinal != null && sectionOrdinal > 0) {
+      // Fallback for pages whose sections carry no usable id: position the
+      // reader at the corresponding reader section by ordinal (issue #7).
+      const headings = main.querySelectorAll("h2.s");
+      const target = headings[sectionOrdinal];
+      if (target) {
+        const rect = target.getBoundingClientRect();
+        const srect = scroll.getBoundingClientRect();
+        scroll.scrollTop = rect.top - srect.top;
+      }
     }
 
     CSR.readingMark.attach(shadow, root);
@@ -459,14 +490,14 @@ h2.s{font-family:'Instrument Sans',system-ui,sans-serif;font-weight:600;font-siz
   CSR.teardownOverlay = function teardownOverlay() {
     const host = document.getElementById("csr-overlay-host");
     if (!host) return;
-    // Remember the reading-marked section before detaching (issue #7), mapped
-    // by section anchor so it survives the reader's rebuilt DOM.
+    // Remember the reading-marked section BEFORE detach() clears units/idx
+    // (issue #7), mapped by section anchor so it survives the reader's rebuilt
+    // DOM. No active mark (idx < 0) or no lastMain => nothing to preserve.
+    let markSectionId = null;
     if (CSR.readingMark && CSR.readingMark.units && CSR.readingMark.idx >= 0 && lastMain) {
-      const unit = CSR.readingMark.units[CSR.readingMark.idx];
-      readerLocation = { sectionId: sectionIdForNode(unit, lastMain) || null };
-    } else {
-      readerLocation = { sectionId: null };
+      markSectionId = sectionIdForNode(CSR.readingMark.units[CSR.readingMark.idx], lastMain) || null;
     }
+    readerLocation = { sectionId: markSectionId };
     CSR.readingMark.detach();
     CSR.citationPeek.detach();
     // Issue #9: drop the citation sidebar and stop driving it from the mark.
@@ -474,11 +505,23 @@ h2.s{font-family:'Instrument Sans',system-ui,sans-serif;font-weight:600;font-siz
       CSR.citationSidebar.detach();
       CSR.readingMark.onCitationUnitChange = null;
     }
-    // Restore the page scroll captured on enter (issue #7).
-    if (capturedPageScroll !== null) {
+    if (markSectionId) {
+      // Jump back to the section containing the active reading mark, mapped by
+      // anchor id onto the publisher page (issue #7). If the anchor is absent
+      // from the page, or the page lacks scrollIntoView (e.g. a test shim),
+      // fall back to the scroll captured on enter.
+      const target = document.getElementById(markSectionId);
+      if (target && typeof target.scrollIntoView === "function") {
+        target.scrollIntoView({ block: "start", behavior: "smooth" });
+      } else {
+        document.documentElement.scrollTop = capturedPageScroll;
+      }
+    } else {
+      // No reading mark (or no matching page anchor): restore the page scroll
+      // captured on enter (issue #7).
       document.documentElement.scrollTop = capturedPageScroll;
-      capturedPageScroll = null;
     }
+    capturedPageScroll = null;
     host.remove();
     removeFonts();
     document.documentElement.style.overflow = "";

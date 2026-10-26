@@ -214,6 +214,18 @@ class Node extends EventTarget {
       this.parentNode = null;
     }
   }
+  replaceWith(node) {
+    const parent = this.parentNode;
+    if (!parent) return;
+    const i = parent._children.indexOf(this);
+    if (i < 0) return;
+    if (node.nodeType === DOCUMENT_FRAGMENT_NODE) {
+      while (node._children.length) parent.insertBefore(node._children[0], this);
+    } else {
+      parent.insertBefore(node, this);
+    }
+    parent.removeChild(this);
+  }
   contains(node) {
     let n = node;
     while (n) {
@@ -231,8 +243,19 @@ class Node extends EventTarget {
     while (this._children.length) this._children[0].remove();
     if (v != null && v !== "") this.appendChild(this.ownerDocument.createTextNode(String(v)));
   }
-  cloneNode() {
-    return new Element(this.ownerDocument, this.tagName || "div");
+  cloneNode(deep = false) {
+    const copy = new Element(this.ownerDocument, this.tagName || "div");
+    const attrs = this.attributes || [];
+    for (const a of attrs) copy.setAttribute(a.name, a.value);
+    if (deep) {
+      for (const ch of this._children) {
+        const ccopy = ch.nodeType === Node.TEXT_NODE
+          ? new Text(this.ownerDocument, ch.data)
+          : ch.cloneNode(true);
+        copy.appendChild(ccopy);
+      }
+    }
+    return copy;
   }
   getBoundingClientRect() {
     return {

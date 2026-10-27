@@ -13,12 +13,11 @@
   let readerLocation = { sectionId: null };
   let capturedPageScroll = null;
   let lastMain = null;
+  let layoutDisposer = null;
 
   // Build stamp: short commit hash of the source this content script was built
   // from. Open DevTools Console on the publisher page and inspect
   // `CSR.readerCommit` to verify which build is actually loaded.
-  // NOTE: the working tree is dirty (uncommitted fixes), so treat this as
-  // "145a777 + uncommitted changes" until you commit.
   CSR.readerCommit = "145a777";
   console.debug("Consistent Scholarly Reader content script build", CSR.readerCommit);
 
@@ -27,7 +26,7 @@
   }
 
   // Section id (heading anchor) that contains `node` within `main`. Mirrors the
-  // reader's structure: main children alternate h2.s headings + content blocks.
+  // reader's structure: main children alternate h2.sr-h2 headings + content blocks.
   function sectionIdForNode(node, main) {
     let block = node;
     while (block && block.parentNode !== main) block = block.parentNode;
@@ -35,7 +34,7 @@
     let lastH2 = null;
     for (const child of main.childNodes) {
       if (child === block) break;
-      if (child.nodeType === 1 && child.tagName === "H2" && child.classList.contains("s")) lastH2 = child;
+      if (child.nodeType === 1 && child.tagName === "H2" && child.classList.contains("sr-h2")) lastH2 = child;
     }
     return lastH2 ? lastH2.id : null;
   }
@@ -45,14 +44,9 @@
   // on section order so the reader lands below the top for non-first sections.
   function scrollToSectionId(scroll, main, sectionId) {
     if (!sectionId) return 0;
-    const headings = Array.from(main.querySelectorAll("h2.s"));
+    const headings = Array.from(main.querySelectorAll("h2.sr-h2"));
     const heading = headings.find((h) => h.id === sectionId);
     if (!heading) return 0;
-    // getBoundingClientRect is relative to the viewport; subtract the scroll
-    // container's rect so the offset is relative to .csr-scroll (the actual
-    // scroller). .csr-root is position:fixed, so heading.offsetTop would be
-    // relative to the viewport/body -- a mixed coordinate frame that lands in
-    // the wrong place in real Chrome.
     const headingRect = heading.getBoundingClientRect();
     const scrollRect = scroll.getBoundingClientRect();
     let offset = headingRect.top - scrollRect.top;
@@ -112,8 +106,8 @@
 
   // Ordinal of heading `el` among all page headings h1-h6 in document order.
   // Used as a last-resort mapping when page sections carry no usable id: reader
-  // sections (h2.s) are rendered in article order, so the nth page section maps
-  // to reader h2.s[n] (best effort; may be off by the title/subsections).
+  // sections (h2.sr-h2) are rendered in article order, so the nth page section maps
+  // to reader h2.sr-h2[n] (best effort; may be off by the title/subsections).
   function pageSectionOrdinal(el, doc) {
     if (!el) return null;
     const headings = Array.from(doc.querySelectorAll("h1, h2, h3, h4, h5, h6"));
@@ -133,7 +127,66 @@
     });
   }
 
-  const STYLE = `
+  // Convert CSR article model to scholarly-reader model
+  function toScholarlyModel(article) {
+    // Map sections to scholarly-reader sections with 'nodes' blocks
+    // (the section content is already a sanitized DocumentFragment)
+    const sections = (article.sections || []).map((sec) => ({
+      id: sec.id,
+      title: sec.title,
+      blocks: sec.content ? [{ type: "nodes", nodes: sec.content }] : [],
+    }));
+
+    // Header: map CSR fields to scholarly-reader header
+    const header = {
+      title: article.title || "",
+      authors: article.authors || "",
+      kicker: article.venueLine || "",
+      kickerHref: article.sourceUrl || null,
+      verdict: null, // CSR doesn't have a verdict concept
+    };
+
+    return { header, sections, figures: [] };
+  }
+
+  CSR.renderOverlay = function renderOverlay(article) {
+    // Ensure ScholarlyReader is available
+    if (!window.ScholarlyReader || !window.ScholarlyReader.buildDocument || !window.ScholarlyReader.mountLayout) {
+      console.error("CSR: ScholarlyReader not loaded before render.js");
+      return;
+    }
+    const { CSS, buildDocument, mountLayout, ensureFonts, removeFonts } = window.ScholarlyReader;
+
+    // Capture the page scroll on enter so teardown can restore it (issue #7).
+    capturedPageScroll = currentPageScroll();
+    // Determine the section to open at: the page's current in-view section,
+    // mapped by heading anchor, evaluated on EVERY entry so re-opening follows
+    // where the user is now reading rather than a stale reading mark from a
+    // previous session (issue #7). Prefer the section's anchor id (matches the
+    // reader's h2.sr-h2 ids, which parsers key off sec.id). Only when the page has
+    // no usable heading anchor fall back to the section saved from the last
+    // teardown, then to ordinal mapping so the reader never opens at the top
+    // just because the page's sections lack ids.
+    const pageSection = capturePageSection(document);
+    const sectionId = (pageSection && pageSection.id) || readerLocation.sectionId || null;
+    const sectionOrdinal = pageSection ? pageSectionOrdinal(pageSection.el, document) : null;
+    readerLocation = { sectionId, sectionOrdinal };
+
+    // Ensure fonts in the host document (fonts don't work inside shadow roots)
+    ensureFonts(document);
+
+    const host = document.createElement("div");
+    host.id = "csr-overlay-host";
+    const shadow = host.attachShadow({ mode: "open" });
+
+    // Create a document for the shadow root
+    const doc = shadow.ownerDocument;
+
+    // Inject scholarly-reader CSS + CSR-specific styles into the shadow root (combined)
+    // CSR styles first so they take precedence and tests find them
+    const style = doc.createElement("style");
+    style.id = "sr-styles";
+    style.textContent = `
 :host{all:initial}
 .csr-root{
   position:fixed;inset:0;z-index:2147483647;
@@ -156,28 +209,22 @@
 .csr-close:hover{background:#F2F5F3}
 .csr-scroll{flex:1 1 auto;overflow-y:auto;padding:2.5rem 1.25rem}
 .csr-page{max-width:72ch;margin:0 auto}
-.csr-page header p.csr-venue{font-family:'Instrument Sans',system-ui,sans-serif;font-size:.85rem;color:#5B6C73;margin:0}
-.csr-page header h1{font-family:'Instrument Sans',system-ui,sans-serif;font-size:1.8rem;font-weight:600;line-height:1.25;margin:.3rem 0}
-.csr-page header p.csr-authors{font-family:'Instrument Sans',system-ui,sans-serif;font-size:.95rem;color:#5B6C73;margin:0 0 1rem}
-h2.s{font-family:'Instrument Sans',system-ui,sans-serif;font-weight:600;font-size:1.3rem;border-left:4px solid #0E6B73;padding-left:.7rem;margin:2.2rem 0 .8rem}
-.csr-page p{margin:.75rem 0;text-align:justify;text-justify:inter-word;hyphens:auto;overflow-wrap:break-word}
-.csr-page ul,.csr-page ol{padding-left:1.3rem;margin:.6rem 0}
-.csr-page li{margin:.3rem 0}
-.csr-page blockquote{border-left:3px solid #CBD6D3;padding-left:1rem;color:#5B6C73;margin:1.1rem 0}
-.csr-page figure{background:#FBFCFB;border:1px solid #CBD6D3;padding:.6rem;margin:1.4rem 0}
+/* Issue #10: preserved blocks (tables/figures) that overshoot the 72ch column
+   scroll horizontally instead of breaking the layout. img/svg inside figures
+   are left alone (they already scale via width: 100%). */
+.csr-page figure{max-width:100%;overflow-x:auto;background:#FBFCFB;border:1px solid #CBD6D3;padding:.6rem;margin:1.4rem 0}
+.csr-page table{max-width:100%;overflow-x:auto}
 .csr-page figure img{display:block;width:100%;height:auto;margin:0}
 .csr-page figure object{display:block;width:100%;height:auto;margin:0;pointer-events:none}
 .csr-page figcaption{font-size:.8rem;color:#5B6C73;margin-top:.4rem}
 .csr-page table{border-collapse:collapse;width:100%;font-size:.88rem;margin:1rem 0}
 .csr-page th,.csr-page td{border-bottom:1px solid #CBD6D3;padding:.45rem .5rem;text-align:left;vertical-align:top}
-/* Issue #10: preserved blocks (tables/figures) that overshoot the 72ch column
-   scroll horizontally instead of breaking the layout. img/svg inside figures
-   are left alone (they already scale via width: 100%). */
-.csr-page figure{max-width:100%;overflow-x:auto}
-.csr-page table{max-width:100%;overflow-x:auto}
 .csr-page a{color:#0E6B73}
 .csr-page sup a[data-csr-cite-ref],.csr-page a[data-csr-cite-ref]{cursor:help;text-decoration:underline dotted}
-/* Reading mark */
+/* Reading mark (sr-* classes from scholarly-reader, plus .rd/.on compat) */
+.sr-on{background:rgba(22,37,44,.15);box-shadow:0 0 0 2px rgba(22,37,44,.15);border-radius:3px;box-decoration-break:clone;-webkit-box-decoration-break:clone}
+.csr-root.sr-active .sr-unit:hover:not(.sr-on){background:rgba(22,37,44,.06)}
+/* CSR-compat classes */
 .rd.on{background:rgba(22,37,44,.15);box-shadow:0 0 0 2px rgba(22,37,44,.15);border-radius:3px;box-decoration-break:clone;-webkit-box-decoration-break:clone}
 .csr-root.rd-active .rd:hover:not(.on){background:rgba(22,37,44,.06)}
 .csr-hint-badge{position:absolute;right:.9rem;bottom:.7rem;font:600 .7rem 'Instrument Sans',system-ui,sans-serif;color:#5B6C73;background:#FBFCFB;border:1px solid #CBD6D3;border-radius:6px;padding:.2rem .55rem;opacity:.9;pointer-events:none}
@@ -214,7 +261,7 @@ h2.s{font-family:'Instrument Sans',system-ui,sans-serif;font-weight:600;font-siz
   background:#FBFCFB;border-left:1px solid #CBD6D3;box-shadow:-4px 0 14px rgba(22,37,44,.12);
 }
 /* TOC: floats in the left margin, never affects the content column */
-.csr-page h2.s,.csr-page h3{scroll-margin-top:1rem}
+.sr-h2,.sr-h3{scroll-margin-top:1rem}
 .csr-toc{
   display:none;position:absolute;top:4.25rem;left:1rem;width:14rem;
   max-height:calc(100% - 5.75rem);overflow-y:auto;
@@ -239,228 +286,198 @@ h2.s{font-family:'Instrument Sans',system-ui,sans-serif;font-weight:600;font-siz
   background:#FBFCFB;border-right:1px solid #CBD6D3;padding:1rem;z-index:2;
   box-shadow:4px 0 14px rgba(22,37,44,.12);
 }
-`;
-
-  function buildHeader(doc, article) {
-    const header = doc.createElement("header");
-    if (article.venueLine) {
-      const venue = doc.createElement("p");
-      venue.className = "csr-venue";
-      venue.textContent = article.venueLine;
-      header.appendChild(venue);
-    }
-    const h1 = doc.createElement("h1");
-    h1.textContent = article.title;
-    header.appendChild(h1);
-    if (article.authors) {
-      const authors = doc.createElement("p");
-      authors.className = "csr-authors";
-      authors.textContent = article.authors;
-      header.appendChild(authors);
-    }
-    return header;
-  }
-
-  const FONT_URL =
-    "https://fonts.googleapis.com/css2?family=Literata:opsz,wght@7..72,400;7..72,600&family=Instrument+Sans:wght@400;600&display=swap";
-
-  // @font-face rules are ignored inside shadow roots, so the stylesheet must
-  // live in the host document; the shadow tree can then use the families by name.
-  function ensureFonts() {
-    if (document.getElementById("csr-fonts")) return;
-    const pre = document.createElement("link");
-    pre.id = "csr-fonts-preconnect";
-    pre.rel = "preconnect";
-    pre.href = "https://fonts.googleapis.com";
-    const link = document.createElement("link");
-    link.id = "csr-fonts";
-    link.rel = "stylesheet";
-    link.href = FONT_URL;
-    document.head.append(pre, link);
-  }
-
-  function removeFonts() {
-    ["csr-fonts", "csr-fonts-preconnect"].forEach((id) => {
-      const el = document.getElementById(id);
-      if (el) el.remove();
-    });
-  }
-
-  // Collect h2 section titles (+ optional h3s inside section content).
-  const INCLUDE_SUBSECTIONS = true;
-
-  function buildToc(main, scroll, root, page) {
-    const items = [];
-    let n = 0;
-    const add = (el, sub) => {
-      const text = el.textContent.replace(/\s+/g, " ").trim();
-      if (!text) return;
-      if (!el.id) el.id = "csr-h-" + n++;
-      items.push({ el, text, sub });
-    };
-    main.querySelectorAll(INCLUDE_SUBSECTIONS ? "h2.s, h3" : "h2.s").forEach((el) =>
-      add(el, el.tagName === "H3")
-    );
-    if (items.length < 2) return null;
-
-    const toc = document.createElement("nav");
-    toc.className = "csr-toc";
-    toc.setAttribute("aria-label", "Table of contents");
-    const title = document.createElement("p");
-    title.className = "csr-toc-title";
-    title.textContent = "Contents";
-    const ul = document.createElement("ul");
-    toc.append(title, ul);
-
-    items.forEach((it) => {
-      const li = document.createElement("li");
-      const a = document.createElement("a");
-      a.href = "#" + it.el.id;
-      a.textContent = it.text;
-      if (it.sub) a.className = "sub";
-      a.addEventListener("click", (e) => {
-        e.preventDefault(); // don't touch the host page's location hash
-        it.el.scrollIntoView({ block: "start", behavior: "smooth" });
-        root.classList.remove("csr-toc-open");
-      });
-      li.appendChild(a);
-      ul.appendChild(li);
-      it.link = a;
-    });
-
-    // Scroll-spy: active = last heading above a line near the top of the viewport.
-    let active = null;
-    let ticking = false;
-    const update = () => {
-      ticking = false;
-      const line = scroll.getBoundingClientRect().top + 90;
-      let cur = items[0];
-      for (const it of items) {
-        if (it.el.getBoundingClientRect().top <= line) cur = it;
-        else break;
-      }
-      if (scroll.scrollTop + scroll.clientHeight >= scroll.scrollHeight - 4) {
-        cur = items[items.length - 1];
-      }
-      if (cur === active) return;
-      active = cur;
-      items.forEach((it) => {
-        it.link.classList.toggle("active", it === cur);
-        if (it === cur) it.link.setAttribute("aria-current", "true");
-        else it.link.removeAttribute("aria-current");
-      });
-      // keep the active entry visible inside the TOC's own scroller
-      const l = cur.link;
-      if (l.offsetTop < toc.scrollTop || l.offsetTop + l.offsetHeight > toc.scrollTop + toc.clientHeight) {
-        toc.scrollTop = l.offsetTop - toc.clientHeight / 2;
-      }
-    };
-    scroll.addEventListener("scroll", () => {
-      if (!ticking) { ticking = true; requestAnimationFrame(update); }
-    }, { passive: true });
-    requestAnimationFrame(update);
-
-    // Show the floating TOC only if the left margin beside the centred
-    // column is wide enough for it (1rem offset + 14rem panel + 1.5rem gap).
-    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
-    const need = 16.5 * rem;
-    new ResizeObserver(() => {
-      const room = page.getBoundingClientRect().left - scroll.getBoundingClientRect().left;
-      root.classList.toggle("csr-toc-wide", room >= need);
-    }).observe(scroll); // fires once on observe, so the initial state is set too
-
-    // The panel sits over the margin, so pass wheel scrolling through to the article
-    toc.addEventListener("wheel", (e) => {
-      if (toc.scrollHeight <= toc.clientHeight) scroll.scrollBy({ top: e.deltaY });
-    }, { passive: true });
-
-    return toc;
-  }
-
-  CSR.renderOverlay = function renderOverlay(article) {
-    ensureFonts();
-    // Capture the page scroll on enter so teardown can restore it (issue #7).
-    capturedPageScroll = currentPageScroll();
-    // Determine the section to open at: the page's current in-view section,
-    // mapped by heading anchor, evaluated on EVERY entry so re-opening follows
-    // where the user is now reading rather than a stale reading mark from a
-    // previous session (issue #7). Prefer the section's anchor id (matches the
-    // reader's h2.s ids, which parsers key off sec.id). Only when the page has
-    // no usable heading anchor fall back to the section saved from the last
-    // teardown, then to ordinal mapping so the reader never opens at the top
-    // just because the page's sections lack ids.
-    const pageSection = capturePageSection(document);
-    const sectionId = (pageSection && pageSection.id) || readerLocation.sectionId || null;
-    const sectionOrdinal = pageSection ? pageSectionOrdinal(pageSection.el, document) : null;
-    readerLocation = { sectionId, sectionOrdinal };
-    const host = document.createElement("div");
-    host.id = "csr-overlay-host";
-    const shadow = host.attachShadow({ mode: "open" });
-
-    const style = document.createElement("style");
-    style.textContent = STYLE;
+` + CSS;
     shadow.appendChild(style);
 
-    const root = document.createElement("div");
-    root.className = "csr-root";
-    root.id = "csr-root";
+    // Build the document structure using scholarly-reader
+    const model = toScholarlyModel(article);
+    const { root, page, main, toc, tocButton } = buildDocument(model, {
+      document: doc,
+      // CSR doesn't use markdown/html blocks; sections are pre-parsed DOM nodes
+      markdown: () => { throw new Error("markdown block not used in CSR"); },
+      sanitize: (html) => html, // nodes bypass sanitizer
+    });
 
-    const topbar = document.createElement("div");
+    // Adapt the structure for CSR:
+    // - root (sr-root) -> wrap in csr-root
+    // - page (sr-page) -> use as csr-page
+    // - main (sr-main) -> keep as main
+    // - toc (sr-toc) -> restyle as csr-toc
+    // - tocButton (sr-toc-btn) -> restyle as csr-toc-btn
+
+    // Wrap sr-root in csr-root
+    const csrRoot = doc.createElement("div");
+    csrRoot.className = "csr-root";
+    csrRoot.id = "csr-root";
+
+    // Topbar
+    const topbar = doc.createElement("div");
     topbar.className = "csr-topbar";
     topbar.innerHTML = `<span class="csr-brand">Reading mode</span><span class="csr-hint">Press <b>R</b> for the reading mark · <b>\u2191</b>/<b>\u2193</b> or <b>k</b>/<b>j</b> to move it · hover a citation to peek it</span>`;
-    const closeBtn = document.createElement("button");
+    const closeBtn = doc.createElement("button");
     closeBtn.className = "csr-close";
     closeBtn.setAttribute("aria-label", "Exit reading mode");
     closeBtn.textContent = "\u00d7";
     closeBtn.addEventListener("click", () => CSR.teardownOverlay());
     topbar.appendChild(closeBtn);
-    root.appendChild(topbar);
+    csrRoot.appendChild(topbar);
 
-    const scroll = document.createElement("div");
+    // Scroll container with page
+    const scroll = doc.createElement("div");
     scroll.className = "csr-scroll";
-    const page = document.createElement("div");
+
+    // The scholarly-reader page has class sr-page; rename to csr-page for CSR styles
     page.className = "csr-page";
-
-    const main = document.createElement("main");
-    main.appendChild(buildHeader(document, article));
-    article.sections.forEach((sec) => {
-      if (sec.title) {
-        const h2 = document.createElement("h2");
-        h2.className = "s";
-        h2.id = sec.id;
-        h2.textContent = sec.title;
-        main.appendChild(h2);
-      }
-      main.appendChild(sec.content);
-    });
-    page.appendChild(main);
     scroll.appendChild(page);
-    root.appendChild(scroll);
+    csrRoot.appendChild(scroll);
 
-    // Floating TOC lives directly under .csr-root (position:fixed => containing
-    // block), so the content column above is untouched.
-    const toc = buildToc(main, scroll, root, page);
+    // TOC: scholarly-reader returns sr-toc (nav.sr-toc), adapt to csr-toc
     if (toc) {
-      root.appendChild(toc);
-      const tocBtn = document.createElement("button");
-      tocBtn.className = "csr-toc-btn";
-      tocBtn.textContent = "Contents";
-      tocBtn.addEventListener("click", () => root.classList.toggle("csr-toc-open"));
-      topbar.insertBefore(tocBtn, closeBtn);
+      toc.className = "csr-toc";
+      toc.setAttribute("aria-label", "Table of contents");
+      // Update TOC link classes
+      toc.querySelectorAll("a").forEach((a) => {
+        if (a.classList.contains("sr-toc-sub")) a.classList.add("sub");
+      });
+      csrRoot.appendChild(toc);
+
+      // TOC button
+      if (tocButton) {
+        tocButton.className = "csr-toc-btn";
+        tocButton.textContent = "Contents";
+        tocButton.addEventListener("click", () => csrRoot.classList.toggle("csr-toc-open"));
+        topbar.insertBefore(tocButton, closeBtn);
+      }
     }
-    shadow.appendChild(root);
+
+    shadow.appendChild(csrRoot);
 
     document.documentElement.appendChild(host);
     document.documentElement.style.overflow = "hidden";
 
+    // Wire up ToC layout (scroll-spy, drawer, toggle)
+    // CSR-specific mountLayout (adapted from scholarly-reader's mountLayout)
+    const win = shadow.defaultView || window;
+    const scroller = scroll; // CSR uses .csr-scroll as scroller
+    const tocNav = csrRoot.querySelector(".csr-toc");
+    const tocBtn = csrRoot.querySelector(".csr-toc-btn");
+
+    if (tocNav) {
+      const headings = new Map();
+      for (const h of Array.from(page.querySelectorAll("h2.sr-h2, h3"))) headings.set(h.id, h);
+      const links = [];
+      for (const a of Array.from(tocNav.querySelectorAll("a"))) {
+        const target = headings.get((a.getAttribute("href") || "").slice(1));
+        if (target) links.push({ a, target });
+      }
+
+      const isWindow = scroller === win;
+      const metrics = () =>
+        isWindow
+          ? {
+              top: 0,
+              scrollTop: doc.documentElement.scrollTop,
+              clientHeight: win.innerHeight,
+              scrollHeight: doc.documentElement.scrollHeight,
+            }
+          : {
+              top: scroller.getBoundingClientRect().top,
+              scrollTop: scroller.scrollTop,
+              clientHeight: scroller.clientHeight,
+              scrollHeight: scroller.scrollHeight,
+            };
+
+      let active = null;
+      let ticking = false;
+      const update = () => {
+        ticking = false;
+        if (!links.length) return;
+        const m = metrics();
+        const line = m.top + 90;
+        let cur = links[0];
+        for (const item of links) {
+          if (item.target.getBoundingClientRect().top <= line) cur = item;
+          else break;
+        }
+        if (m.scrollTop + m.clientHeight >= m.scrollHeight - 4) cur = links[links.length - 1];
+        if (cur === active) return;
+        active = cur;
+        for (const item of links) {
+          item.a.classList.toggle("active", item === cur);
+          if (item === cur) item.a.setAttribute("aria-current", "true");
+          else item.a.removeAttribute("aria-current");
+        }
+        const l = cur.a;
+        if (l.offsetTop < tocNav.scrollTop || l.offsetTop + l.offsetHeight > tocNav.scrollTop + tocNav.clientHeight) {
+          tocNav.scrollTop = l.offsetTop - tocNav.clientHeight / 2;
+        }
+      };
+      const schedule = () => {
+        if (ticking) return;
+        ticking = true;
+        if (typeof win.requestAnimationFrame === "function") win.requestAnimationFrame(update);
+        else update();
+      };
+
+      // Responsive: show floating TOC only if left margin is wide enough
+      const measure = () => {
+        const style = win.getComputedStyle ? win.getComputedStyle(doc.documentElement) : null;
+        const rem = (style && parseFloat(style.fontSize)) || 16;
+        const scrollLeft = isWindow ? 0 : scroller.getBoundingClientRect().left;
+        const room = page.getBoundingClientRect().left - scrollLeft;
+        csrRoot.classList.toggle("csr-toc-wide", room >= 16.5 * rem);
+      };
+      let observer = null;
+      if (typeof win.ResizeObserver === "function") {
+        observer = new win.ResizeObserver(measure);
+        observer.observe(csrRoot);
+      } else {
+        measure();
+      }
+
+      const onScroll = () => schedule();
+      scroller.addEventListener("scroll", onScroll, { passive: true });
+      schedule();
+
+      const onWheel = (e) => {
+        if (tocNav.scrollHeight > tocNav.clientHeight) return;
+        if (isWindow) win.scrollBy(0, e.deltaY);
+        else scroller.scrollBy({ top: e.deltaY });
+      };
+      tocNav.addEventListener("wheel", onWheel, { passive: true });
+
+      const linkHandlers = links.map((item) => {
+        const handler = (e) => {
+          e.preventDefault();
+          item.target.scrollIntoView({ block: "start", behavior: "smooth" });
+          csrRoot.classList.remove("csr-toc-open");
+        };
+        item.a.addEventListener("click", handler);
+        return [item.a, handler];
+      });
+
+      const onToggle = () => csrRoot.classList.toggle("csr-toc-open");
+      if (tocBtn) tocBtn.addEventListener("click", onToggle);
+
+      layoutDisposer = {
+        dispose() {
+          scroller.removeEventListener("scroll", onScroll);
+          tocNav.removeEventListener("wheel", onWheel);
+          for (const [a, handler] of linkHandlers) a.removeEventListener("click", handler);
+          if (tocBtn) tocBtn.removeEventListener("click", onToggle);
+          if (observer) observer.disconnect();
+        },
+      };
+    }
+
     lastMain = main;
     clampOversizedBlocks(main); // issue #10
+
+    // Scroll to the target section (issue #7)
     if (sectionId) {
-      scrollToSectionId(scroll, main, sectionId); // issue #7
+      scrollToSectionId(scroll, main, sectionId);
     } else if (sectionOrdinal != null && sectionOrdinal > 0) {
-      // Fallback for pages whose sections carry no usable id: position the
-      // reader at the corresponding reader section by ordinal (issue #7).
-      const headings = main.querySelectorAll("h2.s");
+      const headings = main.querySelectorAll("h2.sr-h2");
       const target = headings[sectionOrdinal];
       if (target) {
         const rect = target.getBoundingClientRect();
@@ -469,7 +486,7 @@ h2.s{font-family:'Instrument Sans',system-ui,sans-serif;font-weight:600;font-siz
       }
     }
 
-    CSR.readingMark.attach(shadow, root);
+    CSR.readingMark.attach(shadow, csrRoot);
     CSR.citationPeek.attach(shadow, article.bibliography);
 
     // Issue #9: citation sidebar — wire into the reading mark so the panel
@@ -477,14 +494,14 @@ h2.s{font-family:'Instrument Sans',system-ui,sans-serif;font-weight:600;font-siz
     // manifest, so CSR.citationSidebar exists in the real extension; guard
     // for sandboxes that load render.js without it.
     if (CSR.citationSidebar) {
-      CSR.citationSidebar.attach(shadow, root, article.bibliography);
+      CSR.citationSidebar.attach(shadow, csrRoot, article.bibliography);
       if (CSR.readingMark.idx >= 0) {
         CSR.citationSidebar.setActiveUnit(CSR.readingMark.units[CSR.readingMark.idx]);
       }
       CSR.readingMark.onCitationUnitChange = (unit) => CSR.citationSidebar.setActiveUnit(unit);
     }
 
-    return { host, shadow, root, scroll };
+    return { host, shadow, root: csrRoot, scroll };
   };
 
   CSR.teardownOverlay = function teardownOverlay() {
@@ -505,6 +522,10 @@ h2.s{font-family:'Instrument Sans',system-ui,sans-serif;font-weight:600;font-siz
       CSR.citationSidebar.detach();
       CSR.readingMark.onCitationUnitChange = null;
     }
+    if (layoutDisposer) {
+      layoutDisposer.dispose();
+      layoutDisposer = null;
+    }
     if (markSectionId) {
       // Jump back to the section containing the active reading mark, mapped by
       // anchor id onto the publisher page (issue #7). If the anchor is absent
@@ -523,7 +544,9 @@ h2.s{font-family:'Instrument Sans',system-ui,sans-serif;font-weight:600;font-siz
     }
     capturedPageScroll = null;
     host.remove();
-    removeFonts();
+    if (window.ScholarlyReader && window.ScholarlyReader.removeFonts) {
+      window.ScholarlyReader.removeFonts(document);
+    }
     document.documentElement.style.overflow = "";
   };
 })();

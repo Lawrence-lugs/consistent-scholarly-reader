@@ -53,7 +53,9 @@ function newEnvironment() {
   window.CSR.readingMark = { attach() {}, detach() {} };
   window.CSR.citationPeek = { attach() {}, detach() {} };
 
-  // Sandbox: common.js then render.js, exactly as manifest content_scripts order.
+  // Load scholarly-reader first (required by render.js)
+  const SCHOLARLY_SRC = fs.readFileSync(path.join(ROOT, "content", "scholarly-reader.classic.js"), "utf8");
+  // Sandbox: scholarly-reader, common.js then render.js, exactly as manifest content_scripts order.
   const installer = new Function(
     "window",
     "document",
@@ -63,7 +65,7 @@ function newEnvironment() {
     "ResizeObserver",
     "MutationObserver",
     "requestAnimationFrame",
-    COMMON_SRC + "\n" + RENDER_SRC
+    SCHOLARLY_SRC + "\n" + COMMON_SRC + "\n" + RENDER_SRC
   );
   installer(
     window,

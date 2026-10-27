@@ -38,7 +38,7 @@
         "content/parsers/acm.js",
         "content/parsers/science.js",
         "content/parsers/index.js",
-        "content/scholarly-reader.classic.js",
+        "scholarly-reader/dist/scholarly-reader.classic.js",
         "content/render.js",
         "content/readingMark.js",
         "content/citationPeek.js",

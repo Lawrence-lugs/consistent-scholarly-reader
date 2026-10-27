@@ -29,6 +29,8 @@ function loadCSR(window, document) {
     ResizeObserver, MutationObserver, URL,
   } = window;
   /* eslint-enable no-unused-vars */
+  // Load scholarly-reader first (required by readingMark.js and render.js)
+  eval(fs.readFileSync(path.join(CONTENT_DIR, "scholarly-reader.classic.js"), "utf8"));
   for (const name of ["common.js", "render.js", "readingMark.js", "citationPeek.js"]) {
     eval(fs.readFileSync(path.join(CONTENT_DIR, name), "utf8"));
   }
@@ -69,7 +71,7 @@ function makeArticle(document, sections) {
 }
 
 // Resolve the section (heading anchor) that contains a reading-mark unit in
-// the reader DOM: the nearest preceding h2.s sibling ancestor of the block
+// the reader DOM: the nearest preceding h2.sr-h2 sibling ancestor of the block
 // holding the unit.
 function sectionIdOfUnit(unit, main) {
   let node = unit;
@@ -78,7 +80,7 @@ function sectionIdOfUnit(unit, main) {
   let lastH2 = null;
   for (const child of main.childNodes) {
     if (child === node) break;
-    if (child.nodeType === 1 && child.tagName === "H2" && child.classList.contains("s")) {
+    if (child.nodeType === 1 && child.tagName === "H2" && child.classList.contains("sr-h2")) {
       lastH2 = child;
     }
   }
@@ -89,7 +91,7 @@ function sectionIdOfUnit(unit, main) {
 function activateOnUnit(document, shadow, units, unitIndex) {
   const unit = units[unitIndex];
   assert.ok(unit, `reading-mark unit #${unitIndex} must exist`);
-  shadow.dispatchEvent(new MouseEvent("click", { target: unit }));
+  unit.dispatchEvent(new MouseEvent("click", { bubbles: true }));
   return unit;
 }
 
@@ -101,7 +103,7 @@ test("renderOverlay scrolls to the section containing the active reading mark", 
   assert.ok(host && host.id === "csr-overlay-host", "overlay host must be created");
   assert.ok(root.querySelector("main"), "reader page must contain a main element");
 
-  const units = shadow.querySelectorAll(".rd");
+  const units = shadow.querySelectorAll(".sr-unit");
   assert.ok(units.length >= 3, "expected reading-mark units to be built from the article");
 
   // Locate a reading-mark unit that lives in section "s2" (the header paragraphs
@@ -112,7 +114,7 @@ test("renderOverlay scrolls to the section containing the active reading mark", 
 
   // Activate the reading mark on that unit, as a user click would.
   const clicked = activateOnUnit(document, shadow, units, units.indexOf(activeUnit));
-  assert.ok(clicked.classList.contains("on"), "expected the clicked unit to be active");
+  assert.ok(clicked.classList.contains("sr-on"), "expected the clicked unit to be active");
 
   CSR.teardownOverlay();
   assert.strictEqual(document.getElementById("csr-overlay-host"), null, "teardown must remove the overlay");
@@ -210,7 +212,7 @@ test("location maps by section id/anchor across differently structured publisher
   assert.ok(shadow.getElementById("sec-b"), "reader renders heading anchor sec-b");
 
   const main = root.querySelector("main");
-  const units = shadow.querySelectorAll(".rd");
+  const units = shadow.querySelectorAll(".sr-unit");
   assert.strictEqual(units.length, 2, "one unit per section in this fixture");
 
   // The active unit lives in reader section "sec-b" (reader position 2).
@@ -220,8 +222,8 @@ test("location maps by section id/anchor across differently structured publisher
     "anchor resolved from the reader heading, not publisher markup",
   );
 
-  shadow.dispatchEvent(new MouseEvent("click", { target: units[1] }));
-  assert.ok(units[1].classList.contains("on"), "expected the clicked unit to be active");
+  units[1].dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  assert.ok(units[1].classList.contains("sr-on"), "expected the clicked unit to be active");
 
   CSR.teardownOverlay();
   assert.strictEqual(document.getElementById("csr-overlay-host"), null);

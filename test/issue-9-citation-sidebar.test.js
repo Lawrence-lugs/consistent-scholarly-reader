@@ -20,7 +20,7 @@
 //   Clicking an item copies its preview text via navigator.clipboard.writeText.
 //
 // The tests drive the reading mark via CSR.readingMark.activate(i) and tell the
-// sidebar about the current unit via setActiveUnit(shadow.querySelectorAll(".rd")[i]),
+// sidebar about the current unit via setActiveUnit(shadow.querySelectorAll(".sr-unit")[i]),
 // since readingMark keeps its active unit/module state private.
 //
 // Preview text reuse: citationText(target) lives inside citationPeek.js's closure
@@ -98,6 +98,8 @@ function loadSource(code) {
 }
 
 // Load the CSR sources in dependency order (common.js first, it creates window.CSR).
+// First load scholarly-reader (required by readingMark.js and render.js).
+loadSource(readSource("scholarly-reader.classic.js"));
 loadSource(readSource("common.js"));
 loadSource(readSource("citationPeek.js"));
 loadSource(readSource("readingMark.js"));
@@ -196,7 +198,7 @@ function openOverlay(bibliography = BIBLIOGRAPHY) {
   const overlay = CSR.renderOverlay(article);
   assert.ok(overlay.shadow, "renderOverlay created a shadow root");
   assert.ok(overlay.root, "renderOverlay created .csr-root");
-  const units = overlay.shadow.querySelectorAll(".rd");
+  const units = overlay.shadow.querySelectorAll(".sr-unit");
   assert.equal(
     units.length,
     3,
@@ -378,7 +380,7 @@ test(
       "the three content paragraphs still build without a bibliography"
     );
     assert.equal(
-      overlay.shadow.querySelectorAll(".rd").length,
+      overlay.shadow.querySelectorAll(".sr-unit").length,
       3,
       "reading units still build without a bibliography"
     );

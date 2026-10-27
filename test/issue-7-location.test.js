@@ -30,7 +30,7 @@ function loadCSR(window, document) {
   } = window;
   /* eslint-enable no-unused-vars */
   // Load scholarly-reader first (required by readingMark.js and render.js)
-  eval(fs.readFileSync(path.join(CONTENT_DIR, "scholarly-reader.classic.js"), "utf8"));
+  eval(fs.readFileSync(path.join(CONTENT_DIR, "..", "scholarly-reader", "dist", "scholarly-reader.classic.js"), "utf8"));
   for (const name of ["common.js", "render.js", "readingMark.js", "citationPeek.js"]) {
     eval(fs.readFileSync(path.join(CONTENT_DIR, name), "utf8"));
   }

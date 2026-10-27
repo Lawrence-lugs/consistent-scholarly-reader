@@ -99,7 +99,7 @@ function loadSource(code) {
 
 // Load the CSR sources in dependency order (common.js first, it creates window.CSR).
 // First load scholarly-reader (required by readingMark.js and render.js).
-loadSource(readSource("scholarly-reader.classic.js"));
+loadSource(fs.readFileSync(path.join(ROOT, "scholarly-reader", "dist", "scholarly-reader.classic.js"), "utf8"));
 loadSource(readSource("common.js"));
 loadSource(readSource("citationPeek.js"));
 loadSource(readSource("readingMark.js"));
